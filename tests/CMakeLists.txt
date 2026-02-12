@@ -1,0 +1,18 @@
+include(FetchContent)
+set(CATCH2_VERSION v3.5.2)
+FetchContent_Declare(
+  Catch2
+  URL https://ghfast.top/https://github.com/catchorg/Catch2/archive/refs/tags/${CATCH2_VERSION}.zip
+  DOWNLOAD_EXTRACT_TIMESTAMP ON)
+FetchContent_MakeAvailable(Catch2)
+
+include(Catch)
+
+add_executable(mccc_tests
+    test_fixed_containers.cpp
+    test_ring_buffer.cpp
+    test_priority.cpp
+    test_backpressure.cpp
+    test_subscribe.cpp)
+target_link_libraries(mccc_tests Catch2::Catch2WithMain mccc pthread)
+catch_discover_tests(mccc_tests)

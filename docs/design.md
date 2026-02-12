@@ -1,0 +1,539 @@
+# MCCC 架构设计文档
+
+## 概述
+
+MCCC (Message-Centric Component Communication) 是高性能组件通信框架，采用自研的 **Lock-free MPSC Ring Buffer** 实现，专为安全关键系统设计。
+
+## 核心特性
+
+| 特性 | 说明 |
+|------|------|
+| **Lock-free** | 无锁 MPSC 队列，CAS 原子操作 |
+| **零依赖** | 纯 C++17 实现，无第三方库 |
+| **零堆分配** | 热路径无 new/malloc (Envelope 内嵌 + 函数指针释放器) |
+| **优先级控制** | HIGH/MEDIUM/LOW 三级准入 |
+| **背压监控** | NORMAL/WARNING/CRITICAL/FULL |
+| **类型安全** | std::variant 编译期检查 |
+| **MISRA 合规** | 安全关键系统标准 |
+| **编译期可配置** | 队列深度、缓存行对齐、回调表大小均可通过宏调整 |
+
+## 架构设计
+
+### 整体架构
+
+```mermaid
+flowchart TB
+    subgraph Producers[多生产者 - Lock-free]
+        P1[Producer 1]
+        P2[Producer 2]
+        P3[Producer 3]
+    end
+
+    subgraph AsyncBus["AsyncBus&lt;PayloadVariant&gt; Singleton"]
+        subgraph AdmissionControl[准入控制]
+            HC{HIGH<br/>99%}
+            MC{MEDIUM<br/>80%}
+            LC{LOW<br/>60%}
+        end
+        subgraph RingBuffer[Lock-free Ring Buffer]
+            RB[(128K Slots<br/>Envelope 内嵌<br/>Sequence Sync)]
+        end
+        Stats[Statistics]
+    end
+
+    subgraph Consumer[单消费者 - Batch]
+        C1[Batch Processor]
+    end
+
+    P1 --> HC
+    P2 --> MC
+    P3 --> LC
+    HC --> RB
+    MC --> RB
+    LC --> RB
+    RB --> C1
+    RB --> Stats
+```
+
+### Lock-free Ring Buffer 原理
+
+```mermaid
+flowchart LR
+    subgraph RingBuffer[Ring Buffer 128K Slots]
+        direction TB
+        S0[Slot 0<br/>seq=0]
+        S1[Slot 1<br/>seq=1]
+        S2[Slot 2<br/>seq=2]
+        SN[Slot N<br/>seq=N]
+    end
+
+    subgraph Producer[Producer]
+        P1[1. Load prod_pos]
+        P2[2. Check seq == prod_pos]
+        P3[3. CAS prod_pos++]
+        P4[4. Write envelope in-place]
+        P5[5. seq = prod_pos + 1]
+    end
+
+    subgraph Consumer[Consumer]
+        C1[1. Load cons_pos]
+        C2[2. Check seq == cons_pos + 1]
+        C3[3. Read envelope]
+        C4[4. seq = cons_pos + SIZE]
+        C5[5. cons_pos++]
+    end
+
+    P1 --> P2 --> P3 --> P4 --> P5
+    C1 --> C2 --> C3 --> C4 --> C5
+```
+
+**关键设计**：
+- **Sequence 同步**：每个槽位有序列号，生产者写入后 seq = pos + 1，消费者读取后 seq = pos + SIZE
+- **CAS 原子操作**：生产者使用 compare_exchange_weak 竞争槽位
+- **Envelope 内嵌**：`MessageEnvelope<PayloadVariant>` 直接嵌入 RingBufferNode，零堆分配
+- **Cache-line 对齐**：可配置 alignas 防止 false sharing
+
+### 优先级准入控制
+
+核心设计：**容量预留策略**
+
+```mermaid
+flowchart LR
+    subgraph Queue[队列容量 128K]
+        L[0-60%<br/>全部接受]
+        M[60-80%<br/>丢弃 LOW]
+        H[80-99%<br/>丢弃 LOW+MEDIUM]
+        F[99-100%<br/>全部丢弃]
+    end
+    L --> M --> H --> F
+```
+
+| 队列深度 | LOW | MEDIUM | HIGH |
+|----------|-----|--------|------|
+| 0-60% | Accept | Accept | Accept |
+| 60-80% | Drop | Accept | Accept |
+| 80-99% | Drop | Drop | Accept |
+| 99-100% | Drop | Drop | Drop |
+
+**设计原理**：
+- HIGH 消息预留 99% 容量，几乎不可能丢失
+- MEDIUM 消息预留 80% 容量，极限负载才丢失
+- LOW 消息仅使用 60% 容量，优先被丢弃
+
+### 消息流程
+
+```mermaid
+sequenceDiagram
+    participant P as Producer
+    participant B as "AsyncBus<PayloadVariant>"
+    participant R as Ring Buffer
+    participant C as Consumer
+
+    P->>B: PublishWithPriority(data, HIGH)
+    B->>B: CheckThreshold(99%)
+    alt 队列 < 99%
+        B->>B: CAS claim slot
+        B->>R: Write envelope in-place + seq++
+        B->>B: stats.published++
+    else 队列 >= 99%
+        B->>B: stats.dropped++
+    end
+
+    loop ProcessBatch (1024)
+        C->>R: Check seq == cons_pos + 1
+        R->>C: Read envelope
+        C->>C: Dispatch to callbacks
+        C->>R: seq = cons_pos + SIZE
+        C->>B: stats.processed++
+    end
+```
+
+## 编译期配置
+
+所有关键参数均可通过编译宏覆盖，适配不同硬件平台：
+
+| 宏 | 默认值 | 说明 | 嵌入式建议 |
+|----|--------|------|-----------|
+| `MCCC_QUEUE_DEPTH` | 131072 (128K) | 队列深度，必须为 2 的幂 | 1024 或 4096 |
+| `MCCC_CACHELINE_SIZE` | 64 | 缓存行大小 (字节) | 32 或 0 |
+| `MCCC_CACHE_COHERENT` | 1 | 是否启用缓存行对齐 | 0 (单核 MCU) |
+| `MCCC_MAX_MESSAGE_TYPES` | 8 | 消息类型最大数量 | 按需调整 |
+| `MCCC_MAX_CALLBACKS_PER_TYPE` | 16 | 每种类型最大回调数 | 按需调整 |
+| `MCCC_MAX_SUBSCRIPTIONS_PER_COMPONENT` | 16 | 每组件最大订阅数 | 按需调整 |
+| `STREAMING_DMA_ALIGNMENT` | 64 | DMA 缓冲区对齐 | 0 (无缓存 MCU) |
+
+用法示例：
+```bash
+cmake .. -DCMAKE_CXX_FLAGS="-DMCCC_QUEUE_DEPTH=4096 -DMCCC_CACHE_COHERENT=0"
+```
+
+## 核心组件
+
+### 1. AsyncBus\<PayloadVariant\>
+
+单例消息总线，提供发布/订阅接口。用户通过 `std::variant` 定义自己的消息载荷类型：
+
+```cpp
+// 用户定义消息类型
+struct SensorData { float temp; };
+struct MotorCmd   { int speed; };
+using MyPayload = std::variant<SensorData, MotorCmd>;
+
+// 使用模板实例化总线
+using MyBus = mccc::AsyncBus<MyPayload>;
+```
+
+API 概览：
+
+```cpp
+template <typename PayloadVariant>
+class AsyncBus {
+public:
+    static AsyncBus& Instance();
+
+    // 发布消息
+    bool Publish(PayloadVariant&& payload, uint32_t sender_id);
+    bool PublishWithPriority(PayloadVariant&& payload, uint32_t sender_id,
+                             MessagePriority priority);
+
+    // 快速发布（预计算时间戳）
+    bool PublishFast(PayloadVariant&& payload, uint32_t sender_id,
+                     uint64_t timestamp_us);
+
+    // 订阅消息 (编译期类型索引)
+    template<typename T, typename Func>
+    SubscriptionHandle Subscribe(Func&& callback);
+
+    // 取消订阅
+    bool Unsubscribe(const SubscriptionHandle& handle);
+
+    // 处理消息
+    uint32_t ProcessBatch();  // 批量处理，最多 1024 条
+
+    // 监控
+    BusStatisticsSnapshot GetStatistics() const;
+    BackpressureLevel GetBackpressureLevel() const;
+    uint32_t QueueDepth() const;
+    uint32_t QueueUtilizationPercent() const;
+
+    // 性能模式
+    void SetPerformanceMode(PerformanceMode mode);
+    // 错误回调 (原子操作，无需加锁)
+    void SetErrorCallback(ErrorCallback callback);
+};
+```
+
+### 2. Ring Buffer Node
+
+缓存行对齐的槽位结构，`MessageEnvelope<PayloadVariant>` 直接内嵌（零堆分配）：
+
+```cpp
+struct MCCC_ALIGN_CACHELINE RingBufferNode {
+    std::atomic<uint32_t> sequence{0U};          // 序列号同步
+    MessageEnvelope<PayloadVariant> envelope;     // 直接内嵌，无 shared_ptr
+};
+```
+
+### 3. MessageEnvelope\<PayloadVariant\> (std::variant)
+
+类型安全的消息载荷，用户定义自己的 `std::variant`，使用 FixedString 替代 std::string：
+
+```cpp
+// 用户定义载荷类型
+using MyPayload = std::variant<
+    MotionData,    // 运动数据 (16 bytes, 栈上值类型)
+    CameraFrame,   // 相机帧 (FixedString<16> format, shared_ptr raw_data)
+    SystemLog      // 系统日志 (FixedString<64> content)
+>;
+
+template <typename PayloadVariant>
+struct MessageEnvelope {
+    MessageHeader header;       // 消息头 (msg_id, timestamp, sender, priority)
+    PayloadVariant payload;     // 消息体 (variant 值语义)
+};
+```
+
+### 4. 零堆分配容器 (iceoryx 启发)
+
+#### FixedString\<N\>
+
+栈上固定容量字符串，替代 `std::string`：
+
+```cpp
+template <uint32_t Capacity>
+class FixedString {
+public:
+    // 编译期检查：字符串字面量不超容量
+    template <uint32_t N>
+    FixedString(const char (&str)[N]) noexcept;
+
+    // 显式截断构造
+    FixedString(TruncateToCapacity_t, const char* str) noexcept;
+
+    const char* c_str() const noexcept;
+    uint32_t size() const noexcept;
+private:
+    char buf_[Capacity + 1U];
+    uint32_t size_;
+};
+```
+
+#### FixedVector\<T, N\>
+
+栈上固定容量向量，替代 `std::vector`：
+
+```cpp
+template <typename T, uint32_t Capacity>
+class FixedVector {
+public:
+    bool push_back(const T& value) noexcept;  // 返回 bool，无异常
+    bool emplace_back(Args&&... args) noexcept;
+    bool erase_unordered(uint32_t index) noexcept;  // O(1) swap-with-last
+    void clear() noexcept;
+
+    uint32_t size() const noexcept;
+    static constexpr uint32_t capacity() noexcept;
+    bool full() const noexcept;
+};
+```
+
+### 5. Component\<PayloadVariant\>
+
+安全的组件基类，使用 FixedVector 管理订阅：
+
+```cpp
+template <typename PayloadVariant>
+class Component : public std::enable_shared_from_this<Component<PayloadVariant>> {
+protected:
+    // 安全订阅：使用 weak_ptr 防止悬空回调 + std::get_if 无异常
+    template<typename T, typename Func>
+    void SubscribeSafe(Func&& callback);
+
+    // 简单订阅：无 self 指针
+    template<typename T, typename Func>
+    void SubscribeSimple(Func&& callback);
+
+private:
+    FixedVector<SubscriptionHandle, MCCC_MAX_SUBSCRIPTIONS_PER_COMPONENT> handles_;
+};
+```
+
+**weak_ptr 安全机制**：
+
+```mermaid
+sequenceDiagram
+    participant C as "Component<PayloadVariant>"
+    participant B as "AsyncBus<PayloadVariant>"
+    participant CB as Callback
+
+    C->>B: SubscribeSafe(callback)
+    Note over B: 存储 weak_ptr<Component>
+
+    B->>CB: 触发回调
+    CB->>CB: weak_ptr.lock()
+    alt 组件存活
+        CB->>C: 执行回调
+    else 组件已销毁
+        CB->>CB: 跳过回调
+    end
+```
+
+### 6. DataToken (零拷贝令牌)
+
+使用函数指针 + 上下文替代虚基类 + unique_ptr，消除热路径堆分配：
+
+```cpp
+// 函数指针释放回调 (noexcept, 零开销)
+using ReleaseCallback = void (*)(void* context, uint32_t index) noexcept;
+
+class DataToken {
+public:
+    DataToken(const uint8_t* ptr, uint32_t len, uint64_t timestamp,
+              ReleaseCallback release_fn, void* release_ctx,
+              uint32_t buffer_index) noexcept;
+
+    ~DataToken() noexcept;  // 调用 release_fn_ 归还缓冲区
+
+    const uint8_t* data() const noexcept;
+    uint32_t size() const noexcept;
+    bool valid() const noexcept;
+
+private:
+    const uint8_t* ptr_;
+    uint32_t len_;
+    uint64_t timestamp_us_;
+    ReleaseCallback release_fn_;   // 函数指针，零堆分配
+    void* release_ctx_;            // 指向 DMABufferPool
+    uint32_t buffer_index_;        // 池中索引
+};
+```
+
+### 7. 固定回调表
+
+使用编译期类型索引 + 固定数组替代 `unordered_map<type_index, vector>`:
+
+```cpp
+// 编译期计算 variant 类型索引
+template <typename T, typename Variant>
+struct VariantIndex;
+// VariantIndex<MotionData, MyPayload>::value == 0
+// VariantIndex<CameraFrame, MyPayload>::value == 1
+
+// 固定回调表 (栈上分配)
+std::array<CallbackSlot, MCCC_MAX_MESSAGE_TYPES> callback_table_;
+
+struct CallbackSlot {
+    std::array<CallbackEntry, MCCC_MAX_CALLBACKS_PER_TYPE> entries{};
+    uint32_t count{0U};
+};
+```
+
+## 性能优化
+
+### 1. Lock-free CAS (零堆分配)
+
+```cpp
+bool PublishInternal(...) noexcept {
+    uint32_t prod_pos;
+    RingBufferNode* node;
+
+    do {
+        prod_pos = producer_pos_.load(std::memory_order_relaxed);
+        node = &ring_buffer_[prod_pos & BUFFER_MASK];
+
+        // Check slot available (seq == prod_pos)
+        uint32_t seq = node->sequence.load(std::memory_order_acquire);
+        if (seq != prod_pos) {
+            return false;  // Slot not ready
+        }
+    } while (!producer_pos_.compare_exchange_weak(
+        prod_pos, prod_pos + 1U,
+        std::memory_order_acq_rel,
+        std::memory_order_relaxed));
+
+    // Slot claimed - embed envelope directly (零堆分配)
+    node->envelope.header = MessageHeader{msg_id, timestamp, sender, priority};
+    node->envelope.payload = std::move(payload);
+    node->sequence.store(prod_pos + 1U, std::memory_order_release);
+    return true;
+}
+```
+
+### 2. 缓存行对齐 (可配置)
+
+```cpp
+// MCCC_CACHE_COHERENT=1 时启用对齐，=0 时关闭节省 RAM
+MCCC_ALIGN_CACHELINE std::array<RingBufferNode, BUFFER_SIZE> ring_buffer_;
+MCCC_ALIGN_CACHELINE std::atomic<uint32_t> producer_pos_;
+MCCC_ALIGN_CACHELINE std::atomic<uint32_t> consumer_pos_;
+MCCC_ALIGN_CACHELINE BusStatistics stats_;
+```
+
+### 3. 批处理
+
+```cpp
+uint32_t ProcessBatch() noexcept {
+    uint32_t processed = 0U;
+    for (uint32_t i = 0U; i < BATCH_PROCESS_SIZE; ++i) {
+        if (!ProcessOne()) break;
+        ++processed;
+    }
+    return processed;
+}
+```
+
+### 4. 线程安全设计
+
+| 成员 | 同步机制 | 说明 |
+|------|---------|------|
+| `producer_pos_` | `atomic` + CAS | 多生产者无锁竞争 |
+| `consumer_pos_` | `atomic` relaxed | 单消费者，无竞争 |
+| `performance_mode_` | `atomic` relaxed | 读多写少 |
+| `error_callback_` | `atomic` release/acquire | 设置与调用解耦 |
+| `callback_table_` | `std::mutex` | 订阅/取消/分发均加锁 |
+
+## 性能数据
+
+### 测试模式说明
+
+| 模式 | 说明 | 用途 |
+|------|------|------|
+| FULL_FEATURED | 全功能（优先级、背压、统计） | 生产环境 |
+| BARE_METAL | 禁用优先级/背压/统计 | 公平对比 |
+
+### 性能指标
+
+| 指标 | FULL_FEATURED | BARE_METAL |
+|------|---------------|------------|
+| 吞吐量 | ~5.8 M/s | ~18.7 M/s |
+| 入队延迟 | ~172 ns | ~54 ns |
+| E2E 延迟 P50 | ~367 ns | - |
+| E2E 延迟 P95 | ~396 ns | - |
+| E2E 延迟 P99 | ~449 ns | - |
+| HIGH 丢失率 | **0%** | - |
+
+> **注意**：性能数据因硬件环境而异，以上为参考范围。详见 [benchmark.md](benchmark.md)。
+
+### 功能开销分析
+
+| 开销项 | 每消息开销 |
+|--------|-----------|
+| 优先级检查 | ~20-50 ns |
+| 背压判断 | ~10-20 ns |
+| 统计计数 | ~20-40 ns |
+| **总功能开销** | ~118 ns |
+
+> 相比优化前（~187 ns），内嵌 Envelope + 固定回调表消除了 shared_ptr 创建开销。
+
+### 配置参数
+
+| 参数 | 默认值 | 可配置 |
+|------|--------|:------:|
+| 队列容量 | 128K | MCCC_QUEUE_DEPTH |
+| 批处理大小 | 1024 | 常量 |
+| HIGH 阈值 | 99% | 常量 |
+| MEDIUM 阈值 | 80% | 常量 |
+| LOW 阈值 | 60% | 常量 |
+
+## 适用场景
+
+### 推荐使用 MCCC
+
+- 需要消息优先级（紧急停止、错误报警）
+- 需要背压控制（防止系统过载）
+- 安全关键系统（汽车、航空、医疗）
+- 高性能低延迟要求
+- 零外部依赖要求
+- 嵌入式 / MCU 环境（通过编译宏裁剪）
+
+## 文件结构
+
+```
+include/
+└── mccc/
+    ├── protocol.hpp       # 消息类型 + FixedString + FixedVector
+    ├── message_bus.hpp    # AsyncBus<PayloadVariant> + Lock-free Ring Buffer
+    └── component.hpp      # Component<PayloadVariant> 基类
+
+examples/
+├── example_types.hpp      # 示例消息类型定义
+├── simple_demo.cpp        # 最小使用示例
+├── priority_demo.cpp      # 优先级演示
+├── hsm_demo.cpp           # HSM 状态机集成演示
+└── benchmark.cpp          # 性能测试
+
+tests/
+├── test_ring_buffer.cpp   # Ring Buffer 单元测试
+├── test_subscribe.cpp     # 订阅/取消订阅测试
+├── test_priority.cpp      # 优先级准入测试
+├── test_backpressure.cpp  # 背压测试
+└── test_fixed_containers.cpp # FixedString/FixedVector 测试
+
+extras/
+├── state_machine.hpp      # HSM 层次状态机
+├── buffer_pool.hpp        # DMA 缓冲池 (lock-free, sharded)
+├── data_token.hpp         # 零拷贝令牌 (函数指针释放)
+├── data_token.cpp         # DMA 缓冲池实现
+├── bench_utils.hpp        # 基准测试工具
+└── log_macro.hpp          # 编译期日志宏
+```
