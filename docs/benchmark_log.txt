@@ -1,0 +1,67 @@
+========================================
+  Competitive Benchmark (Unified)
+========================================
+  CPU:       Intel Xeon Cascadelake 64 vCPU
+  OS:        Ubuntu 24.04 LTS
+  Compiler:  GCC 13.3, -O3 -march=native
+  Messages:  1000000 per round, 10 rounds
+  Payload:   TestMsg (24 bytes)
+  Affinity:  Producer=core 0, Consumer=core 1
+========================================
+  Versions:
+    MCCC:    v1.0.0 (mccc-bus)
+    eventpp: v0.3.0 (fork: gitee.com/liudegui/eventpp)
+    EnTT:    v3.12.2
+    sigslot: v1.2.3
+    ZeroMQ:  v4.3.5 (libzmq)
+    nng:     v2.0.0-alpha.7
+========================================
+
+[Warmup] Running warmup rounds...
+
+========== MCCC BARE_METAL (lock-free MPSC + message bus) ==========
+  E2E (pub+consume):           Throughput:     9.63 ± 0.37 M/s   Latency: P50=   105 P95=   105 P99=   105 ns
+
+========== MCCC FULL_FEATURED (lock-free MPSC + priority + backpressure + stats) ==========
+  E2E (pub+consume):           Throughput:     4.93 ± 0.15 M/s   Latency: P50=   205 P95=   207 P99=   207 ns
+
+========== eventpp EventQueue Raw (mutex + std::list) ==========
+  Enqueue+Process:             Throughput:     5.25 ± 0.34 M/s   Latency: P50=    49 P95=    52 P99=    52 ns
+
+========== eventpp EventQueue Pool (mutex + pool allocator) ==========
+  Enqueue+Process:             Throughput:     5.00 ± 0.18 M/s   Latency: P50=    53 P95=    55 P99=    55 ns
+
+========== EnTT dispatcher (single-thread, enqueue + update) ==========
+  Enqueue+Update:              Throughput:    93.23 ± 21.93 M/s   Latency: P50=     7 P95=     7 P99=     7 ns
+
+========== sigslot (synchronous signal/slot, direct call) ==========
+  Sync emit:                   Throughput:    26.01 ± 0.78 M/s   Latency: P50=    38 P95=    40 P99=    40 ns
+
+========== ZeroMQ inproc:// (pub/sub, socket-based IPC) ==========
+  Push/Pull inproc:            Throughput:     4.47 ± 0.27 M/s   Latency: P50=   219 P95=   244 P99=   244 ns
+
+==========================================
+  Multi-size Payload Benchmark
+==========================================
+
+--- 64 bytes ---
+  MCCC FULL 64B:               Throughput:     2.06 ± 0.03 M/s   Latency: P50=   485 P95=   493 P99=   493 ns
+  eventpp Raw 64B:             Throughput:     4.82 ± 0.41 M/s   Latency: P50=    62 P95=    64 P99=    64 ns
+  sigslot 64B:                 Throughput:    30.51 ± 1.06 M/s   Latency: P50=    32 P95=    35 P99=    35 ns
+  ZeroMQ 64B:                  Throughput:     1.83 ± 0.83 M/s   Latency: P50=   587 P95=   956 P99=   956 ns
+
+--- 128 bytes ---
+  MCCC FULL 128B:              Throughput:     1.93 ± 0.01 M/s   Latency: P50=   516 P95=   522 P99=   522 ns
+  eventpp Raw 128B:            Throughput:     4.22 ± 0.81 M/s   Latency: P50=    73 P95=    75 P99=    75 ns
+  sigslot 128B:                Throughput:    28.94 ± 0.72 M/s   Latency: P50=    35 P95=    35 P99=    35 ns
+  ZeroMQ 128B:                 Throughput:     1.86 ± 0.06 M/s   Latency: P50=   534 P95=   559 P99=   559 ns
+
+--- 256 bytes ---
+  MCCC FULL 256B:              Throughput:     1.80 ± 0.03 M/s   Latency: P50=   553 P95=   565 P99=   565 ns
+  eventpp Raw 256B:            Throughput:     3.47 ± 0.41 M/s   Latency: P50=    93 P95=    99 P99=    99 ns
+  sigslot 256B:                Throughput:    26.88 ± 0.47 M/s   Latency: P50=    37 P95=    38 P99=    38 ns
+  ZeroMQ 256B:                 Throughput:     1.76 ± 0.03 M/s   Latency: P50=   570 P95=   576 P99=   576 ns
+
+========================================
+  Benchmark Complete!
+========================================

@@ -8,5 +8,20 @@ add_executable(mccc_benchmark benchmark.cpp)
 target_link_libraries(mccc_benchmark mccc_extras pthread)
 target_compile_options(mccc_benchmark PRIVATE -O3 -march=native)
 
+add_executable(mccc_benchmark_spsc benchmark.cpp)
+target_link_libraries(mccc_benchmark_spsc mccc_extras pthread)
+target_compile_options(mccc_benchmark_spsc PRIVATE -O3 -march=native)
+target_compile_definitions(mccc_benchmark_spsc PRIVATE MCCC_SINGLE_PRODUCER=1)
+
+add_executable(mccc_benchmark_sc benchmark.cpp)
+target_link_libraries(mccc_benchmark_sc mccc_extras pthread)
+target_compile_options(mccc_benchmark_sc PRIVATE -O3 -march=native)
+target_compile_definitions(mccc_benchmark_sc PRIVATE MCCC_SINGLE_CORE=1 MCCC_I_KNOW_SINGLE_CORE_IS_UNSAFE=1)
+
+add_executable(mccc_benchmark_spsc_sc benchmark.cpp)
+target_link_libraries(mccc_benchmark_spsc_sc mccc_extras pthread)
+target_compile_options(mccc_benchmark_spsc_sc PRIVATE -O3 -march=native)
+target_compile_definitions(mccc_benchmark_spsc_sc PRIVATE MCCC_SINGLE_PRODUCER=1 MCCC_SINGLE_CORE=1 MCCC_I_KNOW_SINGLE_CORE_IS_UNSAFE=1)
+
 add_executable(mccc_hsm_demo hsm_demo.cpp)
 target_link_libraries(mccc_hsm_demo mccc_extras pthread)

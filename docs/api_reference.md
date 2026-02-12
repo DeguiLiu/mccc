@@ -598,7 +598,8 @@ void InitializeComponent() noexcept;
 |----|--------|------|
 | `MCCC_QUEUE_DEPTH` | 131072 (128K) | Ring Buffer 深度，**必须是 2 的幂** |
 | `MCCC_CACHELINE_SIZE` | 64 | 缓存行大小（字节） |
-| `MCCC_CACHE_COHERENT` | 1 | 是否启用缓存行对齐 |
+| `MCCC_SINGLE_PRODUCER` | 0 | SPSC wait-free 快速路径 (1 = 跳过 CAS) |
+| `MCCC_SINGLE_CORE` | 0 | 单核模式 (1 = 关闭缓存行对齐 + relaxed + signal_fence) |
 | `MCCC_MAX_MESSAGE_TYPES` | 8 | variant 中最大消息类型数 |
 | `MCCC_MAX_CALLBACKS_PER_TYPE` | 16 | 每种消息类型的最大回调数 |
 | `MCCC_MAX_SUBSCRIPTIONS_PER_COMPONENT` | 16 | 每个组件的最大订阅数 |

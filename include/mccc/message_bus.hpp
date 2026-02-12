@@ -7,7 +7,7 @@
  * - Priority-based admission control (HIGH/MEDIUM/LOW)
  * - Zero heap allocation in hot path (envelope embedded in ring buffer)
  * - MISRA C++ compliant
- * - Configurable cache-line alignment (MCCC_CACHE_COHERENT)
+ * - Configurable cache-line alignment (MCCC_SINGLE_CORE=0 enables alignment)
  * - Configurable queue depth (MCCC_QUEUE_DEPTH)
  *
  * @tparam PayloadVariant A std::variant<...> of user-defined message types.
@@ -34,6 +34,7 @@
 #include <functional>
 #include <limits>
 #include <mutex>
+#include <shared_mutex>
 #include <new>
 #include <type_traits>
 
@@ -51,8 +52,28 @@ namespace mccc {
 #define MCCC_CACHELINE_SIZE 64U
 #endif
 
-#ifndef MCCC_CACHE_COHERENT
-#define MCCC_CACHE_COHERENT 1
+#ifndef MCCC_SINGLE_PRODUCER
+#define MCCC_SINGLE_PRODUCER 0
+#endif
+
+#ifndef MCCC_SINGLE_CORE
+#define MCCC_SINGLE_CORE 0
+#endif
+
+// ---- MCCC_SINGLE_CORE safety guard ----
+// MCCC_SINGLE_CORE=1 replaces hardware memory barriers (DMB/MFENCE) with
+// compiler-only signal fences (std::atomic_signal_fence). This is ONLY safe on:
+//   - Single-core MCUs (Cortex-M0/M3/M4/M7, single-core RISC-V)
+//   - Bare-metal or single-core RTOS (FreeRTOS on 1 core, etc.)
+// It is UNSAFE on multi-core SMP systems (ARM-Linux, multi-core Cortex-A, x86 SMP).
+// To enable, you MUST also define MCCC_I_KNOW_SINGLE_CORE_IS_UNSAFE=1 to confirm
+// you understand the implications.
+#if MCCC_SINGLE_CORE
+  #if !defined(MCCC_I_KNOW_SINGLE_CORE_IS_UNSAFE) || !MCCC_I_KNOW_SINGLE_CORE_IS_UNSAFE
+    #error "MCCC_SINGLE_CORE=1 disables hardware memory barriers. " \
+           "This is ONLY safe on single-core MCUs (Cortex-M, bare-metal RTOS). " \
+           "Define MCCC_I_KNOW_SINGLE_CORE_IS_UNSAFE=1 to confirm."
+  #endif
 #endif
 
 #ifndef MCCC_MAX_MESSAGE_TYPES
@@ -63,11 +84,31 @@ namespace mccc {
 #define MCCC_MAX_CALLBACKS_PER_TYPE 16U
 #endif
 
-#if MCCC_CACHE_COHERENT
-#define MCCC_ALIGN_CACHELINE alignas(MCCC_CACHELINE_SIZE)
-#else
+// Single-core mode: disable cache-line alignment (no false sharing concern) + relaxed memory ordering
+#if MCCC_SINGLE_CORE
 #define MCCC_ALIGN_CACHELINE
+#define MCCC_MO_ACQUIRE  std::memory_order_relaxed
+#define MCCC_MO_RELEASE  std::memory_order_relaxed
+#define MCCC_MO_ACQ_REL  std::memory_order_relaxed
+#else
+#define MCCC_ALIGN_CACHELINE alignas(MCCC_CACHELINE_SIZE)
+#define MCCC_MO_ACQUIRE  std::memory_order_acquire
+#define MCCC_MO_RELEASE  std::memory_order_release
+#define MCCC_MO_ACQ_REL  std::memory_order_acq_rel
 #endif
+
+namespace detail {
+inline void AcquireFence() noexcept {
+#if MCCC_SINGLE_CORE
+    std::atomic_signal_fence(std::memory_order_acquire);
+#endif
+}
+inline void ReleaseFence() noexcept {
+#if MCCC_SINGLE_CORE
+    std::atomic_signal_fence(std::memory_order_release);
+#endif
+}
+}  // namespace detail
 
 // ============================================================================
 // Template Helpers
@@ -134,6 +175,9 @@ struct MCCC_ALIGN_CACHELINE BusStatistics {
   std::atomic<uint64_t> medium_priority_dropped{0U};
   std::atomic<uint64_t> low_priority_dropped{0U};
 
+  std::atomic<uint64_t> admission_recheck_count{0U};
+  std::atomic<uint64_t> stale_cache_depth_delta{0U};
+
   void Reset() noexcept {
     messages_published.store(0U, std::memory_order_relaxed);
     messages_dropped.store(0U, std::memory_order_relaxed);
@@ -145,6 +189,8 @@ struct MCCC_ALIGN_CACHELINE BusStatistics {
     high_priority_dropped.store(0U, std::memory_order_relaxed);
     medium_priority_dropped.store(0U, std::memory_order_relaxed);
     low_priority_dropped.store(0U, std::memory_order_relaxed);
+    admission_recheck_count.store(0U, std::memory_order_relaxed);
+    stale_cache_depth_delta.store(0U, std::memory_order_relaxed);
   }
 };
 
@@ -159,6 +205,8 @@ struct BusStatisticsSnapshot {
   uint64_t high_priority_dropped;
   uint64_t medium_priority_dropped;
   uint64_t low_priority_dropped;
+  uint64_t admission_recheck_count;
+  uint64_t stale_cache_depth_delta;
 };
 
 enum class BackpressureLevel : uint8_t {
@@ -230,7 +278,9 @@ class AsyncBus {
         stats_.low_priority_published.load(std::memory_order_relaxed),
         stats_.high_priority_dropped.load(std::memory_order_relaxed),
         stats_.medium_priority_dropped.load(std::memory_order_relaxed),
-        stats_.low_priority_dropped.load(std::memory_order_relaxed)};
+        stats_.low_priority_dropped.load(std::memory_order_relaxed),
+        stats_.admission_recheck_count.load(std::memory_order_relaxed),
+        stats_.stale_cache_depth_delta.load(std::memory_order_relaxed)};
   }
 
   void ResetStatistics() noexcept { stats_.Reset(); }
@@ -260,7 +310,7 @@ class AsyncBus {
     constexpr size_t type_idx = VariantIndex<T, PayloadVariant>::value;
     static_assert(type_idx < MCCC_MAX_MESSAGE_TYPES, "Type index exceeds MCCC_MAX_MESSAGE_TYPES");
 
-    std::lock_guard<std::mutex> lock(callback_mutex_);
+    std::unique_lock<std::shared_mutex> lock(callback_mutex_);
 
     CallbackSlot& slot = callback_table_[type_idx];
     size_t callback_id = next_callback_id_++;
@@ -283,7 +333,7 @@ class AsyncBus {
       return false;
     }
 
-    std::lock_guard<std::mutex> lock(callback_mutex_);
+    std::unique_lock<std::shared_mutex> lock(callback_mutex_);
 
     CallbackSlot& slot = callback_table_[handle.type_index];
     for (uint32_t i = 0U; i < MCCC_MAX_CALLBACKS_PER_TYPE; ++i) {
@@ -301,11 +351,22 @@ class AsyncBus {
 
   uint32_t ProcessBatch() noexcept {
     uint32_t processed = 0U;
+    uint32_t cons_pos = consumer_pos_.load(std::memory_order_relaxed);
+    const PerformanceMode mode = performance_mode_.load(std::memory_order_relaxed);
+    const bool bare_metal = (mode == PerformanceMode::BARE_METAL);
+    const bool no_stats = bare_metal || (mode == PerformanceMode::NO_STATS);
     for (uint32_t i = 0U; i < BATCH_PROCESS_SIZE; ++i) {
-      if (!ProcessOne()) {
+      if (!ProcessOneInBatch(cons_pos, bare_metal)) {
         break;
       }
+      ++cons_pos;
       ++processed;
+    }
+    if (processed > 0U) {
+      consumer_pos_.store(cons_pos, std::memory_order_relaxed);
+      if (!no_stats) {
+        stats_.messages_processed.fetch_add(processed, std::memory_order_relaxed);
+      }
     }
     return processed;
   }
@@ -362,10 +423,15 @@ class AsyncBus {
 
   bool ProcessOne() noexcept {
     uint32_t cons_pos = consumer_pos_.load(std::memory_order_relaxed);
+    return ProcessOneAtPos(cons_pos);
+  }
+
+  bool ProcessOneAtPos(uint32_t cons_pos) noexcept {
     RingBufferNode& node = ring_buffer_[cons_pos & BUFFER_MASK];
 
     uint32_t expected_seq = cons_pos + 1U;
-    uint32_t seq = node.sequence.load(std::memory_order_acquire);
+    uint32_t seq = node.sequence.load(MCCC_MO_ACQUIRE);
+    detail::AcquireFence();
 
     if (seq != expected_seq) {
       return false;
@@ -374,14 +440,39 @@ class AsyncBus {
     DispatchMessage(node.envelope);
     stats_.messages_processed.fetch_add(1U, std::memory_order_relaxed);
 
-    node.sequence.store(cons_pos + BUFFER_SIZE, std::memory_order_release);
+    detail::ReleaseFence();
+    node.sequence.store(cons_pos + BUFFER_SIZE, MCCC_MO_RELEASE);
     consumer_pos_.store(cons_pos + 1U, std::memory_order_relaxed);
+
+    return true;
+  }
+
+  bool ProcessOneInBatch(uint32_t cons_pos, bool bare_metal) noexcept {
+    RingBufferNode& node = ring_buffer_[cons_pos & BUFFER_MASK];
+
+    uint32_t expected_seq = cons_pos + 1U;
+    uint32_t seq = node.sequence.load(MCCC_MO_ACQUIRE);
+    detail::AcquireFence();
+
+    if (seq != expected_seq) {
+      return false;
+    }
+
+    if (bare_metal) {
+      DispatchMessageBareMetal(node.envelope);
+    } else {
+      DispatchMessage(node.envelope);
+    }
+
+    detail::ReleaseFence();
+    node.sequence.store(cons_pos + BUFFER_SIZE, MCCC_MO_RELEASE);
 
     return true;
   }
 
   AsyncBus() noexcept
       : producer_pos_(0U),
+        cached_consumer_pos_(0U),
         consumer_pos_(0U),
         next_msg_id_(1U),
         next_callback_id_(1U),
@@ -425,24 +516,56 @@ class AsyncBus {
 
     if (!bare_metal) {
       uint32_t threshold = GetThresholdForPriority(priority);
-      if (QueueDepth() >= threshold) {
+      uint32_t prod = producer_pos_.load(std::memory_order_relaxed);
+      uint32_t cached_cons = cached_consumer_pos_.load(std::memory_order_relaxed);
+      uint32_t estimated_depth = prod - cached_cons;
+      if (estimated_depth >= threshold) {
+        uint32_t real_cons = consumer_pos_.load(MCCC_MO_ACQUIRE);
+        cached_consumer_pos_.store(real_cons, std::memory_order_relaxed);
+        uint32_t real_depth = prod - real_cons;
         if (!no_stats) {
-          stats_.messages_dropped.fetch_add(1U, std::memory_order_relaxed);
-          UpdatePriorityDroppedStats(priority);
-          ReportError(BusError::QUEUE_FULL, msg_id);
+          stats_.admission_recheck_count.fetch_add(1U, std::memory_order_relaxed);
+          if (estimated_depth > real_depth) {
+            stats_.stale_cache_depth_delta.fetch_add(
+                estimated_depth - real_depth, std::memory_order_relaxed);
+          }
         }
-        return false;
+        if (real_depth >= threshold) {
+          if (!no_stats) {
+            stats_.messages_dropped.fetch_add(1U, std::memory_order_relaxed);
+            UpdatePriorityDroppedStats(priority);
+            ReportError(BusError::QUEUE_FULL, msg_id);
+          }
+          return false;
+        }
       }
     }
 
     uint32_t prod_pos;
     RingBufferNode* node;
 
+#if MCCC_SINGLE_PRODUCER
+    prod_pos = producer_pos_.load(std::memory_order_relaxed);
+    node = &ring_buffer_[prod_pos & BUFFER_MASK];
+
+    uint32_t seq = node->sequence.load(MCCC_MO_ACQUIRE);
+    detail::AcquireFence();
+    if (seq != prod_pos) {
+      if (!no_stats) {
+        stats_.messages_dropped.fetch_add(1U, std::memory_order_relaxed);
+        UpdatePriorityDroppedStats(priority);
+        ReportError(BusError::QUEUE_FULL, msg_id);
+      }
+      return false;
+    }
+    producer_pos_.store(prod_pos + 1U, std::memory_order_relaxed);
+#else
     do {
       prod_pos = producer_pos_.load(std::memory_order_relaxed);
       node = &ring_buffer_[prod_pos & BUFFER_MASK];
 
-      uint32_t seq = node->sequence.load(std::memory_order_acquire);
+      uint32_t seq = node->sequence.load(MCCC_MO_ACQUIRE);
+      detail::AcquireFence();
       if (seq != prod_pos) {
         if (!no_stats) {
           stats_.messages_dropped.fetch_add(1U, std::memory_order_relaxed);
@@ -453,14 +576,16 @@ class AsyncBus {
       }
 
     } while (!producer_pos_.compare_exchange_weak(prod_pos, prod_pos + 1U,
-                                                   std::memory_order_acq_rel,
+                                                   MCCC_MO_ACQ_REL,
                                                    std::memory_order_relaxed));
+#endif
 
     uint64_t assigned_id = next_msg_id_.fetch_add(1U, std::memory_order_relaxed);
     node->envelope.header = MessageHeader{assigned_id, timestamp_us, sender_id, priority};
     node->envelope.payload = std::move(payload);
 
-    node->sequence.store(prod_pos + 1U, std::memory_order_release);
+    detail::ReleaseFence();
+    node->sequence.store(prod_pos + 1U, MCCC_MO_RELEASE);
 
     if (!no_stats) {
       stats_.messages_published.fetch_add(1U, std::memory_order_relaxed);
@@ -475,7 +600,25 @@ class AsyncBus {
       return;
     }
 
-    std::lock_guard<std::mutex> lock(callback_mutex_);
+    std::shared_lock<std::shared_mutex> lock(callback_mutex_);
+
+    const CallbackSlot& slot = callback_table_[type_idx];
+    if (slot.count == 0U) {
+      return;
+    }
+
+    for (uint32_t i = 0U; i < MCCC_MAX_CALLBACKS_PER_TYPE; ++i) {
+      if (slot.entries[i].active) {
+        slot.entries[i].callback(envelope);
+      }
+    }
+  }
+
+  void DispatchMessageBareMetal(const EnvelopeType& envelope) noexcept {
+    size_t type_idx = envelope.payload.index();
+    if (type_idx >= MCCC_MAX_MESSAGE_TYPES) {
+      return;
+    }
 
     const CallbackSlot& slot = callback_table_[type_idx];
     if (slot.count == 0U) {
@@ -536,12 +679,13 @@ class AsyncBus {
 
   MCCC_ALIGN_CACHELINE std::array<RingBufferNode, BUFFER_SIZE> ring_buffer_;
   MCCC_ALIGN_CACHELINE std::atomic<uint32_t> producer_pos_;
+  std::atomic<uint32_t> cached_consumer_pos_{0U};
   MCCC_ALIGN_CACHELINE std::atomic<uint32_t> consumer_pos_;
   MCCC_ALIGN_CACHELINE std::atomic<uint64_t> next_msg_id_;
   size_t next_callback_id_;
   MCCC_ALIGN_CACHELINE BusStatistics stats_;
   std::array<CallbackSlot, MCCC_MAX_MESSAGE_TYPES> callback_table_;
-  mutable std::mutex callback_mutex_;
+  mutable std::shared_mutex callback_mutex_;
   std::atomic<ErrorCallback> error_callback_{nullptr};
   std::atomic<PerformanceMode> performance_mode_{PerformanceMode::FULL_FEATURED};
 };
