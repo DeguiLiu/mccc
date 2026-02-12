@@ -13,6 +13,10 @@ add_executable(mccc_tests
     test_ring_buffer.cpp
     test_priority.cpp
     test_backpressure.cpp
-    test_subscribe.cpp)
+    test_subscribe.cpp
+    test_multithread.cpp
+    test_stability.cpp
+    test_edge_cases.cpp
+    test_copy_move.cpp)
 target_link_libraries(mccc_tests Catch2::Catch2WithMain mccc pthread)
 catch_discover_tests(mccc_tests)

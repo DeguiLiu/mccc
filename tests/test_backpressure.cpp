@@ -11,10 +11,14 @@ using BpPayload = std::variant<BpMsg>;
 using BpBus = mccc::AsyncBus<BpPayload>;
 using BpEnvelope = mccc::MessageEnvelope<BpPayload>;
 
+static void DrainBpBus(BpBus& bus) {
+  while (bus.ProcessBatch() > 0U) {}
+}
+
 TEST_CASE("Backpressure NORMAL when queue empty", "[Backpressure]") {
   auto& bus = BpBus::Instance();
   // Drain first
-  while (bus.ProcessBatch() > 0U) {}
+  DrainBpBus(bus);
 
   auto level = bus.GetBackpressureLevel();
   REQUIRE(level == mccc::BackpressureLevel::NORMAL);
@@ -27,9 +31,9 @@ TEST_CASE("Backpressure level transitions", "[Backpressure]") {
   bus.ResetStatistics();
 
   // Drain first
-  while (bus.ProcessBatch() > 0U) {}
+  DrainBpBus(bus);
 
-  bus.Subscribe<BpMsg>([](const BpEnvelope&) {});
+  auto handle = bus.Subscribe<BpMsg>([](const BpEnvelope&) {});
 
   // Fill to ~76% (WARNING threshold is 75%)
   uint32_t warning_target = (BpBus::MAX_QUEUE_DEPTH * 76U) / 100U;
@@ -55,11 +59,12 @@ TEST_CASE("Backpressure level transitions", "[Backpressure]") {
   REQUIRE(static_cast<uint8_t>(level) >= static_cast<uint8_t>(mccc::BackpressureLevel::CRITICAL));
 
   // Drain
-  while (bus.ProcessBatch() > 0U) {}
+  DrainBpBus(bus);
 
   level = bus.GetBackpressureLevel();
   REQUIRE(level == mccc::BackpressureLevel::NORMAL);
 
+  bus.Unsubscribe(handle);
   bus.SetPerformanceMode(BpBus::PerformanceMode::FULL_FEATURED);
 }
 
@@ -69,9 +74,9 @@ TEST_CASE("Statistics counting", "[Backpressure]") {
   bus.ResetStatistics();
 
   // Drain first
-  while (bus.ProcessBatch() > 0U) {}
+  DrainBpBus(bus);
 
-  bus.Subscribe<BpMsg>([](const BpEnvelope&) {});
+  auto handle = bus.Subscribe<BpMsg>([](const BpEnvelope&) {});
 
   // Publish some messages
   for (uint32_t i = 0U; i < 100U; ++i) {
@@ -83,7 +88,7 @@ TEST_CASE("Statistics counting", "[Backpressure]") {
   REQUIRE(stats.messages_published == 100U);
 
   // Process them
-  while (bus.ProcessBatch() > 0U) {}
+  DrainBpBus(bus);
 
   stats = bus.GetStatistics();
   REQUIRE(stats.messages_processed >= 100U);
@@ -94,6 +99,8 @@ TEST_CASE("Statistics counting", "[Backpressure]") {
   REQUIRE(stats.messages_published == 0U);
   REQUIRE(stats.messages_processed == 0U);
   REQUIRE(stats.messages_dropped == 0U);
+
+  bus.Unsubscribe(handle);
 }
 
 TEST_CASE("Priority statistics tracking", "[Backpressure]") {
@@ -102,9 +109,9 @@ TEST_CASE("Priority statistics tracking", "[Backpressure]") {
   bus.ResetStatistics();
 
   // Drain first
-  while (bus.ProcessBatch() > 0U) {}
+  DrainBpBus(bus);
 
-  bus.Subscribe<BpMsg>([](const BpEnvelope&) {});
+  auto handle = bus.Subscribe<BpMsg>([](const BpEnvelope&) {});
 
   BpMsg h{1};
   bus.PublishWithPriority(std::move(h), 1U, mccc::MessagePriority::HIGH);
@@ -119,5 +126,6 @@ TEST_CASE("Priority statistics tracking", "[Backpressure]") {
   REQUIRE(stats.low_priority_published == 1U);
 
   // Drain
-  while (bus.ProcessBatch() > 0U) {}
+  DrainBpBus(bus);
+  bus.Unsubscribe(handle);
 }
