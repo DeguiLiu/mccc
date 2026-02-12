@@ -5,3 +5,8 @@ cmake-build-*/
 *.swp
 *.swo
 *~
+build_competitive/
+
+# Compiled binaries
+competitive_bench
+competitive_bench_dbg
