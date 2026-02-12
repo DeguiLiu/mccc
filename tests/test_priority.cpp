@@ -14,13 +14,18 @@ using PrioPayload = std::variant<PrioMsg>;
 using PrioBus = mccc::AsyncBus<PrioPayload>;
 using PrioEnvelope = mccc::MessageEnvelope<PrioPayload>;
 
+static void DrainPrioBus(PrioBus& bus) {
+  while (bus.ProcessBatch() > 0U) {}
+}
+
 TEST_CASE("HIGH priority accepted at high queue depth", "[Priority]") {
   auto& bus = PrioBus::Instance();
   bus.SetPerformanceMode(PrioBus::PerformanceMode::FULL_FEATURED);
   bus.ResetStatistics();
+  DrainPrioBus(bus);
 
   // Subscribe (needed for dispatch)
-  bus.Subscribe<PrioMsg>([](const PrioEnvelope&) {});
+  auto handle = bus.Subscribe<PrioMsg>([](const PrioEnvelope&) {});
 
   // Fill queue to ~85% (above LOW threshold 60%, above MEDIUM threshold 80%)
   // Don't process - let queue fill up
@@ -55,15 +60,17 @@ TEST_CASE("HIGH priority accepted at high queue depth", "[Priority]") {
   }
 
   // Drain queue
-  while (bus.ProcessBatch() > 0U) {}
+  DrainPrioBus(bus);
+  bus.Unsubscribe(handle);
 }
 
 TEST_CASE("Priority ordering: LOW dropped first", "[Priority]") {
   auto& bus = PrioBus::Instance();
   bus.SetPerformanceMode(PrioBus::PerformanceMode::FULL_FEATURED);
   bus.ResetStatistics();
+  DrainPrioBus(bus);
 
-  bus.Subscribe<PrioMsg>([](const PrioEnvelope&) {});
+  auto handle = bus.Subscribe<PrioMsg>([](const PrioEnvelope&) {});
 
   // Fill queue past LOW threshold (60%)
   uint32_t low_threshold = PrioBus::LOW_PRIORITY_THRESHOLD;
@@ -94,15 +101,17 @@ TEST_CASE("Priority ordering: LOW dropped first", "[Priority]") {
   }
 
   // Drain
-  while (bus.ProcessBatch() > 0U) {}
+  DrainPrioBus(bus);
+  bus.Unsubscribe(handle);
 }
 
 TEST_CASE("BARE_METAL mode bypasses priority check", "[Priority]") {
   auto& bus = PrioBus::Instance();
   bus.SetPerformanceMode(PrioBus::PerformanceMode::BARE_METAL);
   bus.ResetStatistics();
+  DrainPrioBus(bus);
 
-  bus.Subscribe<PrioMsg>([](const PrioEnvelope&) {});
+  auto handle = bus.Subscribe<PrioMsg>([](const PrioEnvelope&) {});
 
   // In BARE_METAL, priority check is skipped
   uint32_t accepted = 0U;
@@ -116,6 +125,7 @@ TEST_CASE("BARE_METAL mode bypasses priority check", "[Priority]") {
   REQUIRE(accepted == 1000U);
 
   // Drain
-  while (bus.ProcessBatch() > 0U) {}
+  DrainPrioBus(bus);
+  bus.Unsubscribe(handle);
   bus.SetPerformanceMode(PrioBus::PerformanceMode::FULL_FEATURED);
 }
