@@ -332,6 +332,8 @@ int main() {
   LOG_INFO("   MCCC Performance Benchmark");
   LOG_INFO("========================================");
   LOG_INFO("Queue capacity: %u", ExampleBus::MAX_QUEUE_DEPTH);
+  LOG_INFO("MCCC_SINGLE_PRODUCER=%d, MCCC_SINGLE_CORE=%d",
+           MCCC_SINGLE_PRODUCER, MCCC_SINGLE_CORE);
 
   if (bench::pin_thread_to_core(0)) {
     LOG_INFO("CPU affinity: core 0 (producer)");

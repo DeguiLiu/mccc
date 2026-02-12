@@ -14,8 +14,9 @@ MCCC (Message-Centric Component Communication) 是高性能组件通信框架，
 | **优先级控制** | HIGH/MEDIUM/LOW 三级准入 |
 | **背压监控** | NORMAL/WARNING/CRITICAL/FULL |
 | **类型安全** | std::variant 编译期检查 |
-| **MISRA 合规** | 安全关键系统标准 |
+| **MISRA 合规** | 安全关键系统标准 (C++17 子集) |
 | **编译期可配置** | 队列深度、缓存行对齐、回调表大小均可通过宏调整 |
+| **嵌入式优化** | SPSC wait-free、索引缓存、signal fence、BARE_METAL 无锁分发 |
 
 ## 架构设计
 
@@ -156,7 +157,8 @@ sequenceDiagram
 |----|--------|------|-----------|
 | `MCCC_QUEUE_DEPTH` | 131072 (128K) | 队列深度，必须为 2 的幂 | 1024 或 4096 |
 | `MCCC_CACHELINE_SIZE` | 64 | 缓存行大小 (字节) | 32 或 0 |
-| `MCCC_CACHE_COHERENT` | 1 | 是否启用缓存行对齐 | 0 (单核 MCU) |
+| `MCCC_SINGLE_PRODUCER` | 0 | SPSC wait-free 快速路径 (跳过 CAS) | 1 (单生产者场景) |
+| `MCCC_SINGLE_CORE` | 0 | 单核模式：关闭缓存行对齐 + relaxed + signal_fence (需 `MCCC_I_KNOW_SINGLE_CORE_IS_UNSAFE=1`) | 1 (Cortex-M 单核 MCU) |
 | `MCCC_MAX_MESSAGE_TYPES` | 8 | 消息类型最大数量 | 按需调整 |
 | `MCCC_MAX_CALLBACKS_PER_TYPE` | 16 | 每种类型最大回调数 | 按需调整 |
 | `MCCC_MAX_SUBSCRIPTIONS_PER_COMPONENT` | 16 | 每组件最大订阅数 | 按需调整 |
@@ -164,7 +166,7 @@ sequenceDiagram
 
 用法示例：
 ```bash
-cmake .. -DCMAKE_CXX_FLAGS="-DMCCC_QUEUE_DEPTH=4096 -DMCCC_CACHE_COHERENT=0"
+cmake .. -DCMAKE_CXX_FLAGS="-DMCCC_QUEUE_DEPTH=4096 -DMCCC_SINGLE_CORE=1 -DMCCC_I_KNOW_SINGLE_CORE_IS_UNSAFE=1"
 ```
 
 ## 核心组件
@@ -390,55 +392,78 @@ struct CallbackSlot {
 
 ## 性能优化
 
-### 1. Lock-free CAS (零堆分配)
+### 1. Lock-free CAS / SPSC Wait-Free
 
 ```cpp
-bool PublishInternal(...) noexcept {
-    uint32_t prod_pos;
-    RingBufferNode* node;
+// MPSC 模式 (默认): CAS 循环竞争槽位
+do {
+    prod_pos = producer_pos_.load(std::memory_order_relaxed);
+    node = &ring_buffer_[prod_pos & BUFFER_MASK];
+    uint32_t seq = node->sequence.load(MCCC_MO_ACQUIRE);
+    detail::AcquireFence();
+    if (seq != prod_pos) return false;
+} while (!producer_pos_.compare_exchange_weak(
+    prod_pos, prod_pos + 1U, MCCC_MO_ACQ_REL, std::memory_order_relaxed));
 
-    do {
-        prod_pos = producer_pos_.load(std::memory_order_relaxed);
-        node = &ring_buffer_[prod_pos & BUFFER_MASK];
+// SPSC 模式 (MCCC_SINGLE_PRODUCER=1): wait-free，无 CAS 开销
+prod_pos = producer_pos_.load(std::memory_order_relaxed);
+node = &ring_buffer_[prod_pos & BUFFER_MASK];
+uint32_t seq = node->sequence.load(MCCC_MO_ACQUIRE);
+detail::AcquireFence();
+if (seq != prod_pos) return false;
+producer_pos_.store(prod_pos + 1U, std::memory_order_relaxed);
+```
 
-        // Check slot available (seq == prod_pos)
-        uint32_t seq = node->sequence.load(std::memory_order_acquire);
-        if (seq != prod_pos) {
-            return false;  // Slot not ready
-        }
-    } while (!producer_pos_.compare_exchange_weak(
-        prod_pos, prod_pos + 1U,
-        std::memory_order_acq_rel,
-        std::memory_order_relaxed));
+### 2. 索引缓存 (减少跨核原子读取)
 
-    // Slot claimed - embed envelope directly (零堆分配)
-    node->envelope.header = MessageHeader{msg_id, timestamp, sender, priority};
-    node->envelope.payload = std::move(payload);
-    node->sequence.store(prod_pos + 1U, std::memory_order_release);
-    return true;
+```cpp
+// 生产者侧：两级准入检查
+uint32_t cached_cons = cached_consumer_pos_.load(std::memory_order_relaxed);  // 本核缓存
+uint32_t estimated_depth = prod - cached_cons;
+if (estimated_depth >= threshold) {
+    // 仅当缓存估算超阈值时，才跨核读取真实 consumer_pos_
+    uint32_t real_cons = consumer_pos_.load(MCCC_MO_ACQUIRE);
+    cached_consumer_pos_.store(real_cons, std::memory_order_relaxed);
+    // 记录 recheck 统计，监控缓存过期程度
 }
 ```
 
-### 2. 缓存行对齐 (可配置)
-
-```cpp
-// MCCC_CACHE_COHERENT=1 时启用对齐，=0 时关闭节省 RAM
-MCCC_ALIGN_CACHELINE std::array<RingBufferNode, BUFFER_SIZE> ring_buffer_;
-MCCC_ALIGN_CACHELINE std::atomic<uint32_t> producer_pos_;
-MCCC_ALIGN_CACHELINE std::atomic<uint32_t> consumer_pos_;
-MCCC_ALIGN_CACHELINE BusStatistics stats_;
-```
-
-### 3. 批处理
+### 3. 批处理优化 (consumer_pos_ + stats 批量更新)
 
 ```cpp
 uint32_t ProcessBatch() noexcept {
-    uint32_t processed = 0U;
+    uint32_t cons_pos = consumer_pos_.load(std::memory_order_relaxed);
+    // 循环内不更新 consumer_pos_，不累计 stats
     for (uint32_t i = 0U; i < BATCH_PROCESS_SIZE; ++i) {
-        if (!ProcessOne()) break;
-        ++processed;
+        if (!ProcessOneInBatch(cons_pos, bare_metal)) break;
+        ++cons_pos; ++processed;
     }
-    return processed;
+    // 循环结束后一次性更新
+    consumer_pos_.store(cons_pos, std::memory_order_relaxed);
+    stats_.messages_processed.fetch_add(processed, std::memory_order_relaxed);
+}
+```
+
+### 4. Signal Fence (单核 MCU 优化)
+
+```cpp
+// MCCC_SINGLE_CORE=1 时：relaxed + 编译器屏障替代硬件 DMB
+#if MCCC_SINGLE_CORE
+#define MCCC_MO_ACQUIRE  std::memory_order_relaxed
+#define MCCC_MO_RELEASE  std::memory_order_relaxed
+// 仅约束编译器重排序，无硬件屏障开销
+inline void AcquireFence() { std::atomic_signal_fence(std::memory_order_acquire); }
+#endif
+```
+
+### 5. BARE_METAL 无锁分发
+
+```cpp
+// BARE_METAL 模式：callback table 视为初始化后不可变，跳过 shared_mutex
+if (bare_metal) {
+    DispatchMessageBareMetal(node.envelope);  // 无锁
+} else {
+    DispatchMessage(node.envelope);  // shared_lock 读锁
 }
 ```
 
@@ -446,31 +471,64 @@ uint32_t ProcessBatch() noexcept {
 
 | 成员 | 同步机制 | 说明 |
 |------|---------|------|
-| `producer_pos_` | `atomic` + CAS | 多生产者无锁竞争 |
-| `consumer_pos_` | `atomic` relaxed | 单消费者，无竞争 |
+| `producer_pos_` | `atomic` + CAS / SPSC store | 多生产者 CAS，单生产者 wait-free store |
+| `consumer_pos_` | `atomic` relaxed | 单消费者，ProcessBatch 批量更新 |
+| `cached_consumer_pos_` | `atomic` relaxed | 生产者侧缓存，减少跨核读取 |
 | `performance_mode_` | `atomic` relaxed | 读多写少 |
 | `error_callback_` | `atomic` release/acquire | 设置与调用解耦 |
-| `callback_table_` | `std::mutex` | 订阅/取消/分发均加锁 |
+| `callback_table_` | `std::shared_mutex` | 分发取读锁，订阅/取消取写锁；BARE_METAL 模式无锁 |
 
 ## 性能数据
 
 ### 测试模式说明
 
+MCCC 提供运行时性能模式（通过 `SetPerformanceMode()` 切换，非编译宏）：
+
 | 模式 | 说明 | 用途 |
 |------|------|------|
-| FULL_FEATURED | 全功能（优先级、背压、统计） | 生产环境 |
-| BARE_METAL | 禁用优先级/背压/统计 | 公平对比 |
+| FULL_FEATURED | 全功能：优先级准入检查 + 背压判断 + 统计计数 | **生产环境默认模式** |
+| BARE_METAL | 跳过优先级/背压/统计，仅保留核心 CAS 入队 | 纯队列性能基线对比 |
+| NO_STATS | 保留优先级准入，跳过统计计数 | 需要准入控制但不需要统计 |
 
-### 性能指标
+### 性能指标（完整配置矩阵）
 
-| 指标 | FULL_FEATURED | BARE_METAL |
-|------|---------------|------------|
-| 吞吐量 | ~5.8 M/s | ~18.7 M/s |
-| 入队延迟 | ~172 ns | ~54 ns |
-| E2E 延迟 P50 | ~367 ns | - |
-| E2E 延迟 P95 | ~396 ns | - |
-| E2E 延迟 P99 | ~449 ns | - |
-| HIGH 丢失率 | **0%** | - |
+> 测试环境: Ubuntu 24.04, GCC 13.3, -O3 -march=native, Intel Xeon Cascadelake 64 vCPU
+> P50/P99 为延迟百分位数。P50 = 中位数（典型延迟），P99 = 尾部延迟（99% 消息低于此值）。
+
+#### 入队吞吐量
+
+| 配置 | SP | SC | FULL_FEATURED | BARE_METAL | Feature Overhead |
+|------|:--:|:--:|:---:|:---:|:---:|
+| **A: MPSC (默认)** | 0 | 0 | 27.7 M/s (36 ns) | 33.0 M/s (30 ns) | 5.8 ns |
+| **B: SPSC** | 1 | 0 | 30.3 M/s (33 ns) | **43.2 M/s (23 ns)** | 9.8 ns |
+| **C: MPSC+单核** | 0 | 1 | 29.2 M/s (34 ns) | 38.2 M/s (26 ns) | 8.1 ns |
+| **D: SPSC+单核** | 1 | 1 | 29.4 M/s (34 ns) | 39.9 M/s (25 ns) | 8.9 ns |
+
+> SP = `MCCC_SINGLE_PRODUCER`, SC = `MCCC_SINGLE_CORE`
+
+#### 端到端延迟 (FULL_FEATURED)
+
+| 配置 | P50 | P95 | P99 | Max |
+|------|-----|-----|-----|-----|
+| A: MPSC | 585 ns | 783 ns | 933 ns | 18 us |
+| B: SPSC | 680 ns | 892 ns | 1063 ns | 13 us |
+| C: MPSC+单核 | **310 ns** | **389 ns** | **442 ns** | 17 us |
+| D: SPSC+单核 | 625 ns | 878 ns | 1011 ns | 18 us |
+
+#### 背压准入控制（所有配置均通过）
+
+| 优先级 | 发送 | 丢弃率 |
+|--------|------|--------|
+| HIGH | 30,000 | **0.0%** |
+| MEDIUM | 39,321 | 12.6% |
+| LOW | 39,320 | 47.6% |
+
+#### 分析
+
+- **BARE_METAL 吞吐量**：SPSC 比 MPSC 快 31%（CAS 消除），SINGLE_CORE 比多核快 15%（relaxed ordering）
+- **FULL_FEATURED 吞吐量**：各配置接近（~28-30 M/s），shared_mutex 读锁是主要瓶颈
+- **SINGLE_CORE E2E 延迟**：MPSC+单核 P50 仅 310 ns，是默认配置的 53%（x86 上 relaxed ordering 减少 store buffer 序列化）
+- **嵌入式 MCU**：ARM Cortex-M 上 SINGLE_CORE 收益更大（省去 DMB 硬件屏障指令）
 
 > **注意**：性能数据因硬件环境而异，以上为参考范围。详见 [benchmark.md](benchmark.md)。
 
@@ -478,12 +536,10 @@ uint32_t ProcessBatch() noexcept {
 
 | 开销项 | 每消息开销 |
 |--------|-----------|
-| 优先级检查 | ~20-50 ns |
-| 背压判断 | ~10-20 ns |
-| 统计计数 | ~20-40 ns |
-| **总功能开销** | ~118 ns |
-
-> 相比优化前（~187 ns），内嵌 Envelope + 固定回调表消除了 shared_ptr 创建开销。
+| 优先级检查 (含索引缓存) | ~3-5 ns |
+| shared_mutex 读锁 | ~3-5 ns |
+| 统计计数 (批量) | ~1-2 ns |
+| **总功能开销** | ~6-10 ns |
 
 ### 配置参数
 
@@ -506,6 +562,44 @@ uint32_t ProcessBatch() noexcept {
 - 零外部依赖要求
 - 嵌入式 / MCU 环境（通过编译宏裁剪）
 
+## 实时性验收指标
+
+MCCC 不在库内部默认嵌入计时代码。以下为**可测预算与门限**，用户应在目标硬件上用外部工具（逻辑分析仪、DWT cycle counter、`bench_utils.hpp` 中的 `measure_latency()`）验证。
+
+### Publish 路径 WCET 预算
+
+| 配置 | 操作 | 预算上限 | 测量方法 |
+|------|------|---------|----------|
+| MPSC FULL_FEATURED | `Publish()` 单次调用 | ≤ 500 ns | DWT cycle counter 或 GPIO toggle + 示波器 |
+| MPSC BARE_METAL | `PublishFast()` 单次调用 | ≤ 200 ns | 同上 |
+| SPSC BARE_METAL | `PublishFast()` 单次调用 | ≤ 100 ns | 同上 |
+
+> 以上预算基于 x86 Xeon 实测数据留 3x 余量。嵌入式 ARM Cortex-M4 @168 MHz 上预期更高，需实测校准。
+
+### ProcessBatch WCET 预算
+
+| 批大小 | 预算上限 | 说明 |
+|--------|---------|------|
+| 1024 (默认) | ≤ 50 us | 包含回调执行时间，取决于用户回调复杂度 |
+| 自定义 N | N × 单消息处理时间 | 线性可预测，无动态分配 |
+
+### 抖动门限
+
+| 指标 | 门限 | 验证方法 |
+|------|------|----------|
+| Publish 延迟 P99/P50 | ≤ 2.0x | 运行 benchmark，检查 P99/P50 比值 |
+| 吞吐量 StdDev/Mean | ≤ 5% | 运行 10 轮 benchmark，检查标准差比 |
+| 持续运行内存增长 | 0 字节 | 固定 Ring Buffer，无动态分配，长时间运行后检查 RSS |
+
+### 验收流程
+
+1. **目标硬件上编译**: 使用目标工具链交叉编译，启用 `-O2` 或 `-Os`
+2. **运行 benchmark**: `./mccc_benchmark` 获取吞吐量/延迟基线
+3. **WCET 测量**: 用 DWT cycle counter 或 GPIO 翻转 + 示波器测量 `Publish()` 和 `ProcessBatch()` 的最大执行时间
+4. **抖动检查**: 确认 P99/P50 ≤ 2.0x，StdDev/Mean ≤ 5%
+5. **长时间稳定性**: 连续运行 ≥ 1 小时，确认无内存增长、无丢弃异常
+6. **背压验证**: 确认 HIGH 优先级消息丢弃率 = 0%
+
 ## 文件结构
 
 ```
@@ -523,11 +617,15 @@ examples/
 └── benchmark.cpp          # 性能测试
 
 tests/
+├── test_fixed_containers.cpp # FixedString/FixedVector 单元测试
 ├── test_ring_buffer.cpp   # Ring Buffer 单元测试
 ├── test_subscribe.cpp     # 订阅/取消订阅测试
 ├── test_priority.cpp      # 优先级准入测试
 ├── test_backpressure.cpp  # 背压测试
-└── test_fixed_containers.cpp # FixedString/FixedVector 测试
+├── test_multithread.cpp   # 多线程压力测试
+├── test_stability.cpp     # 吞吐稳定性/延迟分位数测试
+├── test_edge_cases.cpp    # 边界条件/错误恢复测试
+└── test_copy_move.cpp     # 拷贝/移动语义测试
 
 extras/
 ├── state_machine.hpp      # HSM 层次状态机
