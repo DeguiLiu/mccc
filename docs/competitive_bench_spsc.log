@@ -1,0 +1,75 @@
+========================================
+  Competitive Benchmark (Unified)
+========================================
+  CPU:       Intel Xeon Cascadelake 64 vCPU
+  OS:        Ubuntu 24.04 LTS
+  Compiler:  GCC 13.3, -O3 -march=native
+  Messages:  1000000 per round, 10 rounds
+  Payload:   TestMsg (24/64/128/256 bytes)
+  Affinity:  Producer=core 0, Consumer=core 1
+========================================
+  MCCC Config:
+    MCCC_SINGLE_PRODUCER = 1
+    MCCC_SINGLE_CORE     = 0
+    MCCC_QUEUE_DEPTH     = 131072
+  Versions:
+    MCCC:    v1.0.0 (mccc-bus)
+    eventpp: v0.3.0 (fork: gitee.com/liudegui/eventpp)
+    EnTT:    v3.12.2
+    sigslot: v1.2.3
+    ZeroMQ:  v4.3.5 (libzmq)
+========================================
+
+[Warmup] Running warmup rounds...
+
+========== MCCC BARE_METAL (lock-free MPSC + message bus) ==========
+  E2E (pub+consume):           Throughput:    18.35 ± 1.34 M/s   Latency: P50=    53 P95=    57 P99=    57 ns
+  Publish-only:                Throughput:    32.38 ± 0.75 M/s   Latency: P50=    31 P95=    32 P99=    32 ns
+
+========== MCCC FULL_FEATURED (lock-free MPSC + priority + backpressure + stats) ==========
+  E2E (pub+consume):           Throughput:     8.29 ± 1.62 M/s   Latency: P50=   115 P95=   128 P99=   128 ns
+  Publish-only:                Throughput:    19.86 ± 0.35 M/s   Latency: P50=    50 P95=    51 P99=    51 ns
+
+========== eventpp EventQueue Raw (mutex + std::list) ==========
+  Enqueue+Process:             Throughput:     5.03 ± 0.29 M/s   Latency: P50=    50 P95=    52 P99=    52 ns
+
+========== eventpp EventQueue Pool (mutex + CAS pool allocator) ==========
+  Enqueue+Process:             Throughput:     4.87 ± 0.10 M/s   Latency: P50=    55 P95=    57 P99=    57 ns
+
+========== eventpp EventQueue HighPerf (SpinLock + CAS pool + shared_mutex) ==========
+  Enqueue+Process:             Throughput:     6.53 ± 0.41 M/s   Latency: P50=    31 P95=    37 P99=    37 ns
+
+========== EnTT dispatcher (single-thread, enqueue + update) ==========
+  Enqueue+Update:              Throughput:   106.32 ± 26.78 M/s   Latency: P50=     5 P95=     5 P99=     5 ns
+
+========== sigslot (synchronous signal/slot, direct call) ==========
+  Sync emit:                   Throughput:    25.42 ± 0.71 M/s   Latency: P50=    39 P95=    41 P99=    41 ns
+
+========== ZeroMQ inproc:// (pub/sub, socket-based IPC) ==========
+  Push/Pull inproc:            Throughput:     3.09 ± 1.29 M/s   Latency: P50=   274 P95=   619 P99=   619 ns
+
+==========================================
+  Multi-size Payload Benchmark
+==========================================
+
+--- 64 bytes ---
+  MCCC FULL 64B:               Throughput:     2.10 ± 0.08 M/s   Latency: P50=   474 P95=   500 P99=   500 ns
+  eventpp Raw 64B:             Throughput:     4.52 ± 0.38 M/s   Latency: P50=    70 P95=    72 P99=    72 ns
+  sigslot 64B:                 Throughput:    29.54 ± 0.84 M/s   Latency: P50=    34 P95=    35 P99=    35 ns
+  ZeroMQ 64B:                  Throughput:     0.99 ± 0.10 M/s   Latency: P50=   973 P95=  1137 P99=  1137 ns
+
+--- 128 bytes ---
+  MCCC FULL 128B:              Throughput:     2.42 ± 0.23 M/s   Latency: P50=   428 P95=   451 P99=   451 ns
+  eventpp Raw 128B:            Throughput:     4.42 ± 0.47 M/s   Latency: P50=    73 P95=    75 P99=    75 ns
+  sigslot 128B:                Throughput:    30.79 ± 0.61 M/s   Latency: P50=    32 P95=    33 P99=    33 ns
+  ZeroMQ 128B:                 Throughput:     2.01 ± 0.17 M/s   Latency: P50=   492 P95=   554 P99=   554 ns
+
+--- 256 bytes ---
+  MCCC FULL 256B:              Throughput:     8.53 ± 2.17 M/s   Latency: P50=   108 P95=   110 P99=   110 ns
+  eventpp Raw 256B:            Throughput:     3.01 ± 0.32 M/s   Latency: P50=    95 P95=    97 P99=    97 ns
+  sigslot 256B:                Throughput:    30.69 ± 0.54 M/s   Latency: P50=    33 P95=    33 P99=    33 ns
+  ZeroMQ 256B:                 Throughput:     1.75 ± 0.06 M/s   Latency: P50=   559 P95=   596 P99=   596 ns
+
+========================================
+  Benchmark Complete!
+========================================

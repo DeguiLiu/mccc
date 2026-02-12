@@ -4,7 +4,7 @@
  */
 
 #include <catch2/catch_test_macros.hpp>
-#include <mccc/message_bus.hpp>
+#include <mccc/mccc.hpp>
 
 #include <atomic>
 #include <thread>

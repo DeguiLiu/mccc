@@ -5,14 +5,14 @@
 ## 目录
 
 - [核心概念](#核心概念)
-- [protocol.hpp — 协议定义](#protocolhpp--协议定义)
+- [mccc.hpp — 核心定义](#mccchpp--核心定义)
   - [FixedString\<N\>](#fixedstringn)
   - [FixedVector\<T, N\>](#fixedvectort-n)
   - [MessagePriority](#messagepriority)
   - [MessageHeader](#messageheader)
   - [MessageEnvelope\<PayloadVariant\>](#messageenvelopepayloadvariant)
   - [make_overloaded](#make_overloaded)
-- [message_bus.hpp — 消息总线](#message_bushpp--消息总线)
+- [mccc.hpp — 消息总线](#mccchpp--消息总线)
   - [AsyncBus\<PayloadVariant\>](#asyncbuspayloadvariant)
   - [发布 API](#发布-api)
   - [订阅 API](#订阅-api)
@@ -65,7 +65,7 @@ MyBus::Instance().ProcessBatch();
 
 ---
 
-## protocol.hpp — 协议定义
+## mccc.hpp — 核心定义
 
 ### FixedString\<N\>
 
@@ -250,7 +250,7 @@ std::visit(mccc::make_overloaded(
 
 ---
 
-## message_bus.hpp — 消息总线
+## mccc.hpp — 消息总线
 
 ### AsyncBus\<PayloadVariant\>
 
@@ -592,7 +592,7 @@ void InitializeComponent() noexcept;
 
 ## 编译期配置宏
 
-在 `#include <mccc/message_bus.hpp>` **之前**定义这些宏来自定义配置：
+在 `#include <mccc/mccc.hpp>` **之前**定义这些宏来自定义配置：
 
 | 宏 | 默认值 | 说明 |
 |----|--------|------|
@@ -610,7 +610,7 @@ void InitializeComponent() noexcept;
 #define MCCC_QUEUE_DEPTH 65536U           // 64K 队列
 #define MCCC_MAX_MESSAGE_TYPES 4U         // 仅 4 种消息类型
 #define MCCC_MAX_CALLBACKS_PER_TYPE 8U    // 每类最多 8 个回调
-#include <mccc/message_bus.hpp>
+#include <mccc/mccc.hpp>
 ```
 
 ---
@@ -620,7 +620,7 @@ void InitializeComponent() noexcept;
 ### 最小可运行示例
 
 ```cpp
-#include <mccc/message_bus.hpp>
+#include <mccc/mccc.hpp>
 #include <cstdio>
 
 struct Temperature { float celsius; };
@@ -657,7 +657,7 @@ int main() {
 ### 多线程生产者-消费者
 
 ```cpp
-#include <mccc/message_bus.hpp>
+#include <mccc/mccc.hpp>
 #include <atomic>
 #include <thread>
 

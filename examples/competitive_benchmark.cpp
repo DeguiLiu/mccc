@@ -1,11 +1,12 @@
 /**
  * @file competitive_benchmark.cpp
- * @brief Unified benchmark: MCCC vs eventpp vs EnTT vs sigslot vs ZeroMQ vs nng
+ * @brief Unified benchmark: MCCC vs eventpp vs EnTT vs sigslot vs ZeroMQ
  *
  * All tests run on the same machine, same conditions, same message payload.
  * Each benchmark pins threads to specific CPU cores for stable results.
  *
  * Compile (from mccc-bus root):
+ *   # MPSC (default):
  *   g++ -std=c++17 -O3 -march=native -o competitive_bench \
  *       examples/competitive_benchmark.cpp \
  *       -Iinclude \
@@ -14,10 +15,21 @@
  *       -I../streaming-arch-demo/refs/sigslot/include \
  *       -I../streaming-arch-demo/refs/cppzmq \
  *       -I../streaming-arch-demo/refs/libzmq/include \
- *       -I../streaming-arch-demo/refs/nng/include \
  *       -L../streaming-arch-demo/refs/libzmq/build/lib \
- *       -L../streaming-arch-demo/refs/nng/build \
- *       -lzmq -lnng -lpthread
+ *       -lzmq -lpthread
+ *
+ *   # SPSC:
+ *   g++ -std=c++17 -O3 -march=native -DMCCC_SINGLE_PRODUCER=1 \
+ *       -o competitive_bench_spsc \
+ *       examples/competitive_benchmark.cpp \
+ *       -Iinclude \
+ *       -I../streaming-arch-demo/refs/eventpp/include \
+ *       -I../streaming-arch-demo/refs/entt/src \
+ *       -I../streaming-arch-demo/refs/sigslot/include \
+ *       -I../streaming-arch-demo/refs/cppzmq \
+ *       -I../streaming-arch-demo/refs/libzmq/include \
+ *       -L../streaming-arch-demo/refs/libzmq/build/lib \
+ *       -lzmq -lpthread
  */
 
 #include <atomic>
@@ -43,10 +55,9 @@
 #include <entt/signal/dispatcher.hpp>
 #include <sigslot/signal.hpp>
 #include <zmq.hpp>
-#include <nng/nng.h>
 
 // --- MCCC ---
-#include <mccc/message_bus.hpp>
+#include <mccc/mccc.hpp>
 
 using namespace std::chrono;
 using Clock = steady_clock;
@@ -150,12 +161,12 @@ static void bench_mccc_bare() {
 
     // E2E throughput: producer thread + consumer thread
     std::vector<double> tps, lats;
+    std::vector<double> pub_tps, pub_lats;  // publish-only
     for (uint32_t r = 0; r < ROUNDS; ++r) {
         bus.ResetStatistics();
         while (bus.ProcessBatch() > 0) {}
 
         std::atomic<bool> stop{false};
-        std::atomic<uint64_t> consumed{0};
         std::thread consumer([&]() {
             pin_thread(CONSUMER_CORE);
             while (!stop.load(std::memory_order_acquire)) { bus.ProcessBatch(); }
@@ -175,9 +186,33 @@ static void bench_mccc_bare() {
         tps.push_back(static_cast<double>(BENCH_MSGS) / elapsed_ns * 1e3);
         lats.push_back(elapsed_ns / BENCH_MSGS);
     }
+
+    // Publish-only throughput (no consumer thread)
+    for (uint32_t r = 0; r < ROUNDS; ++r) {
+        bus.ResetStatistics();
+        while (bus.ProcessBatch() > 0) {}
+
+        pin_thread(PRODUCER_CORE);
+        auto start = Clock::now();
+        for (uint32_t i = 0; i < BENCH_MSGS; ++i) {
+            bus.Publish(TestMsg{i, 1.0f, 2.0f, 3.0f, 4.0f}, 0U);
+        }
+        auto end = Clock::now();
+
+        double elapsed_ns = static_cast<double>(duration_cast<nanoseconds>(end - start).count());
+        pub_tps.push_back(static_cast<double>(BENCH_MSGS) / elapsed_ns * 1e3);
+        pub_lats.push_back(elapsed_ns / BENCH_MSGS);
+
+        // Drain queue
+        while (bus.ProcessBatch() > 0) {}
+    }
+
     Stats tp = compute_stats(tps);
     Stats lat = compute_stats(lats);
+    Stats ptp = compute_stats(pub_tps);
+    Stats plat = compute_stats(pub_lats);
     print_result("E2E (pub+consume):", tp, lat);
+    print_result("Publish-only:", ptp, plat);
     bus.Unsubscribe(handle);
 }
 
@@ -191,6 +226,7 @@ static void bench_mccc_full() {
     auto handle = bus.Subscribe<TestMsg>([](const mccc::MessageEnvelope<BenchPayload>&) {});
 
     std::vector<double> tps, lats;
+    std::vector<double> pub_tps, pub_lats;  // publish-only
     for (uint32_t r = 0; r < ROUNDS; ++r) {
         bus.ResetStatistics();
         while (bus.ProcessBatch() > 0) {}
@@ -215,9 +251,33 @@ static void bench_mccc_full() {
         tps.push_back(static_cast<double>(BENCH_MSGS) / elapsed_ns * 1e3);
         lats.push_back(elapsed_ns / BENCH_MSGS);
     }
+
+    // Publish-only throughput (no consumer thread)
+    for (uint32_t r = 0; r < ROUNDS; ++r) {
+        bus.ResetStatistics();
+        while (bus.ProcessBatch() > 0) {}
+
+        pin_thread(PRODUCER_CORE);
+        auto start = Clock::now();
+        for (uint32_t i = 0; i < BENCH_MSGS; ++i) {
+            bus.Publish(TestMsg{i, 1.0f, 2.0f, 3.0f, 4.0f}, 0U);
+        }
+        auto end = Clock::now();
+
+        double elapsed_ns = static_cast<double>(duration_cast<nanoseconds>(end - start).count());
+        pub_tps.push_back(static_cast<double>(BENCH_MSGS) / elapsed_ns * 1e3);
+        pub_lats.push_back(elapsed_ns / BENCH_MSGS);
+
+        // Drain queue
+        while (bus.ProcessBatch() > 0) {}
+    }
+
     Stats tp = compute_stats(tps);
     Stats lat = compute_stats(lats);
+    Stats ptp = compute_stats(pub_tps);
+    Stats plat = compute_stats(pub_lats);
     print_result("E2E (pub+consume):", tp, lat);
+    print_result("Publish-only:", ptp, plat);
     bus.Unsubscribe(handle);
 }
 
@@ -267,9 +327,46 @@ struct PoolPolicies {
 };
 
 static void bench_eventpp_pool() {
-    print_header("eventpp EventQueue Pool (mutex + pool allocator)");
+    print_header("eventpp EventQueue Pool (mutex + CAS pool allocator)");
     using PoolQueue = eventpp::EventQueue<int, void(const TestMsg&), PoolPolicies>;
     PoolQueue queue;
+
+    std::atomic<uint64_t> processed{0};
+    queue.appendListener(1, [&processed](const TestMsg&) {
+        processed.fetch_add(1, std::memory_order_relaxed);
+    });
+
+    std::vector<double> tps, lats;
+    for (uint32_t r = 0; r < ROUNDS; ++r) {
+        processed.store(0, std::memory_order_relaxed);
+
+        pin_thread(PRODUCER_CORE);
+        auto start = Clock::now();
+        for (uint32_t i = 0; i < BENCH_MSGS; ++i) {
+            float fi = static_cast<float>(i);
+            queue.enqueue(1, TestMsg{i, fi, fi * 2, fi * 3, fi * 4});
+        }
+        auto enqueue_end = Clock::now();
+        queue.process();
+        auto end = Clock::now();
+
+        double enqueue_ns = static_cast<double>(duration_cast<nanoseconds>(enqueue_end - start).count());
+        double total_ns = static_cast<double>(duration_cast<nanoseconds>(end - start).count());
+        tps.push_back(static_cast<double>(BENCH_MSGS) / total_ns * 1e3);
+        lats.push_back(enqueue_ns / BENCH_MSGS);
+    }
+    Stats tp = compute_stats(tps);
+    Stats lat = compute_stats(lats);
+    print_result("Enqueue+Process:", tp, lat);
+}
+
+// ============================================================================
+// 4b. eventpp EventQueue (HighPerfPolicy: SpinLock + CAS pool + shared_mutex)
+// ============================================================================
+static void bench_eventpp_highperf() {
+    print_header("eventpp EventQueue HighPerf (SpinLock + CAS pool + shared_mutex)");
+    using HiQueue = eventpp::EventQueue<int, void(const TestMsg&), eventpp::HighPerfPolicy>;
+    HiQueue queue;
 
     std::atomic<uint64_t> processed{0};
     queue.appendListener(1, [&processed](const TestMsg&) {
@@ -424,66 +521,7 @@ static void bench_zeromq() {
 }
 
 // ============================================================================
-// 8. nng inproc:// (pub/sub, socket-based)
-// ============================================================================
-static void bench_nng() {
-    print_header("nng inproc:// (push/pull, socket-based IPC)");
-
-    std::vector<double> tps, lats;
-    for (uint32_t r = 0; r < ROUNDS; ++r) {
-        nng_socket push_sock = NNG_SOCKET_INITIALIZER;
-        nng_socket pull_sock = NNG_SOCKET_INITIALIZER;
-        nng_push0_open(&push_sock);
-        nng_pull0_open(&pull_sock);
-
-        std::string addr = "inproc://nng_bench_" + std::to_string(r);
-        nng_listen(push_sock, addr.c_str(), NULL, 0);
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        nng_dial(pull_sock, addr.c_str(), NULL, 0);
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-
-        std::atomic<uint64_t> consumed{0};
-
-        std::thread consumer([&]() {
-            pin_thread(CONSUMER_CORE);
-            while (consumed.load(std::memory_order_relaxed) < BENCH_MSGS) {
-                char buf[64];
-                size_t sz = sizeof(buf);
-                int rv = nng_recv(pull_sock, buf, &sz, 0);  // blocking recv
-                if (rv == 0) {
-                    consumed.fetch_add(1, std::memory_order_relaxed);
-                }
-            }
-        });
-
-        pin_thread(PRODUCER_CORE);
-        auto start = Clock::now();
-        for (uint32_t i = 0; i < BENCH_MSGS; ++i) {
-            TestMsg m{i, 1.0f, 2.0f, 3.0f, 4.0f};
-            nng_send(push_sock, &m, sizeof(m), 0);
-        }
-        auto end = Clock::now();
-
-        while (consumed.load(std::memory_order_relaxed) < BENCH_MSGS) {
-            std::this_thread::yield();
-        }
-        consumer.join();
-
-        double elapsed_ns = static_cast<double>(duration_cast<nanoseconds>(end - start).count());
-        tps.push_back(static_cast<double>(BENCH_MSGS) / elapsed_ns * 1e3);
-        lats.push_back(elapsed_ns / BENCH_MSGS);
-
-        nng_socket_close(push_sock);
-        nng_socket_close(pull_sock);
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
-    }
-    Stats tp = compute_stats(tps);
-    Stats lat = compute_stats(lats);
-    print_result("Push/Pull inproc:", tp, lat);
-}
-
-// ============================================================================
-// 9. Multi-size payload benchmark (MCCC vs eventpp vs sigslot vs ZeroMQ)
+// 8. Multi-size payload benchmark (MCCC vs eventpp vs sigslot vs ZeroMQ)
 // ============================================================================
 
 // MCCC multi-size bus types
@@ -677,13 +715,16 @@ int main() {
     std::printf("  Payload:   TestMsg (24/64/128/256 bytes)\n");
     std::printf("  Affinity:  Producer=core %d, Consumer=core %d\n", PRODUCER_CORE, CONSUMER_CORE);
     std::printf("========================================\n");
+    std::printf("  MCCC Config:\n");
+    std::printf("    MCCC_SINGLE_PRODUCER = %d\n", MCCC_SINGLE_PRODUCER);
+    std::printf("    MCCC_SINGLE_CORE     = %d\n", MCCC_SINGLE_CORE);
+    std::printf("    MCCC_QUEUE_DEPTH     = %d\n", MCCC_QUEUE_DEPTH);
     std::printf("  Versions:\n");
     std::printf("    MCCC:    v1.0.0 (mccc-bus)\n");
     std::printf("    eventpp: v0.3.0 (fork: gitee.com/liudegui/eventpp)\n");
     std::printf("    EnTT:    v3.12.2\n");
     std::printf("    sigslot: v1.2.3\n");
     std::printf("    ZeroMQ:  v4.3.5 (libzmq)\n");
-    std::printf("    nng:     v2.0.0-alpha.7\n");
     std::printf("========================================\n");
 
     // Warmup
@@ -698,10 +739,10 @@ int main() {
     bench_mccc_full();
     bench_eventpp_raw();
     bench_eventpp_pool();
+    bench_eventpp_highperf();
     bench_entt();
     bench_sigslot();
     bench_zeromq();
-    // nng v2.0.0-alpha.7 has API stability issues, skipped
 
     bench_multi_size();
 
