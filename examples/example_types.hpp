@@ -9,9 +9,9 @@
 #ifndef MCCC_EXAMPLE_TYPES_HPP_
 #define MCCC_EXAMPLE_TYPES_HPP_
 
-#include <mccc/component.hpp>
-
 #include <cstdint>
+
+#include <mccc/component.hpp>
 #include <memory>
 #include <variant>
 #include <vector>
@@ -44,9 +44,7 @@ struct CameraFrame {
   CameraFrame(int32_t w, int32_t h, const char* fmt) noexcept
       : width(w), height(h), format(mccc::TruncateToCapacity, fmt), raw_data(nullptr) {}
 
-  void AllocateBuffer(uint32_t buffer_size) {
-    raw_data = std::make_shared<std::vector<uint8_t>>(buffer_size);
-  }
+  void AllocateBuffer(uint32_t buffer_size) { raw_data = std::make_shared<std::vector<uint8_t>>(buffer_size); }
 };
 
 /**

@@ -6,16 +6,16 @@
 #ifndef LOG_LEVEL
 #define LOG_LEVEL LOG_LEVEL_INFO
 #endif
-#include "log_macro.hpp"
 #include "example_types.hpp"
+#include "log_macro.hpp"
 #include "state_machine.hpp"
 
-#include <mccc/component.hpp>
-
 #include <cinttypes>
+
 #include <atomic>
 #include <chrono>
 #include <iostream>
+#include <mccc/component.hpp>
 #include <thread>
 
 using namespace example;
@@ -25,11 +25,16 @@ enum class RobotState : uint8_t { IDLE = 0U, RUNNING = 1U, PAUSED = 2U, ERROR = 
 
 constexpr const char* robot_state_to_string(RobotState state) noexcept {
   switch (state) {
-    case RobotState::IDLE: return "IDLE";
-    case RobotState::RUNNING: return "RUNNING";
-    case RobotState::PAUSED: return "PAUSED";
-    case RobotState::ERROR: return "ERROR";
-    default: return "UNKNOWN";
+    case RobotState::IDLE:
+      return "IDLE";
+    case RobotState::RUNNING:
+      return "RUNNING";
+    case RobotState::PAUSED:
+      return "PAUSED";
+    case RobotState::ERROR:
+      return "ERROR";
+    default:
+      return "UNKNOWN";
   }
 }
 
@@ -69,11 +74,12 @@ class RobotController : public ExampleComponent {
     InitializeComponent();
     setup_state_machine();
 
-    SubscribeSafe<MotionData>([](std::shared_ptr<ExampleComponent> self_base,
-                                const MotionData& data, const MessageHeader& header) noexcept {
-      auto self = std::static_pointer_cast<RobotController>(self_base);
-      if (self) self->on_motion(data, header);
-    });
+    SubscribeSafe<MotionData>(
+        [](std::shared_ptr<ExampleComponent> self_base, const MotionData& data, const MessageHeader& header) noexcept {
+          auto self = std::static_pointer_cast<RobotController>(self_base);
+          if (self)
+            self->on_motion(data, header);
+        });
     LOG_INFO("[RobotController] Initialized with HSM");
   }
 
@@ -102,29 +108,34 @@ class RobotController : public ExampleComponent {
 
     idle_state_->set_on_entry([](RobotContext& ctx, const hsm::Event&) {
       ctx.current_state.store(RobotState::IDLE, std::memory_order_release);
-      if (ctx.verbose) LOG_INFO("[HSM] -> IDLE");
+      if (ctx.verbose)
+        LOG_INFO("[HSM] -> IDLE");
     });
     idle_state_->AddTransition(RobotEvents::START, *running_state_);
 
     running_state_->set_on_entry([](RobotContext& ctx, const hsm::Event&) {
       ctx.current_state.store(RobotState::RUNNING, std::memory_order_release);
-      if (ctx.verbose) LOG_INFO("[HSM] -> RUNNING");
+      if (ctx.verbose)
+        LOG_INFO("[HSM] -> RUNNING");
     });
     running_state_->AddTransition(RobotEvents::STOP, *idle_state_);
     running_state_->AddTransition(RobotEvents::PAUSE, *paused_state_);
-    running_state_->AddTransition(RobotEvents::FAULT, *error_state_,
-        [](RobotContext& ctx, const hsm::Event&) { ctx.error_count.fetch_add(1U, std::memory_order_relaxed); });
+    running_state_->AddTransition(RobotEvents::FAULT, *error_state_, [](RobotContext& ctx, const hsm::Event&) {
+      ctx.error_count.fetch_add(1U, std::memory_order_relaxed);
+    });
 
     paused_state_->set_on_entry([](RobotContext& ctx, const hsm::Event&) {
       ctx.current_state.store(RobotState::PAUSED, std::memory_order_release);
-      if (ctx.verbose) LOG_INFO("[HSM] -> PAUSED");
+      if (ctx.verbose)
+        LOG_INFO("[HSM] -> PAUSED");
     });
     paused_state_->AddTransition(RobotEvents::RESUME, *running_state_);
     paused_state_->AddTransition(RobotEvents::STOP, *idle_state_);
 
     error_state_->set_on_entry([](RobotContext& ctx, const hsm::Event&) {
       ctx.current_state.store(RobotState::ERROR, std::memory_order_release);
-      if (ctx.verbose) LOG_INFO("[HSM] -> ERROR");
+      if (ctx.verbose)
+        LOG_INFO("[HSM] -> ERROR");
     });
     error_state_->AddTransition(RobotEvents::RESET, *idle_state_);
 
@@ -165,7 +176,8 @@ int main() {
   std::thread worker([&stop_worker]() noexcept {
     while (!stop_worker.load(std::memory_order_acquire)) {
       uint32_t processed = ExampleBus::Instance().ProcessBatch();
-      if (processed == 0U) std::this_thread::sleep_for(std::chrono::microseconds(100));
+      if (processed == 0U)
+        std::this_thread::sleep_for(std::chrono::microseconds(100));
     }
     while (ExampleBus::Instance().ProcessBatch() > 0U) {}
   });

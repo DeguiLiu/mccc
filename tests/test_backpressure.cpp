@@ -6,7 +6,9 @@
 #include <catch2/catch_test_macros.hpp>
 #include <mccc/mccc.hpp>
 
-struct BpMsg { int value; };
+struct BpMsg {
+  int value;
+};
 using BpPayload = std::variant<BpMsg>;
 using BpBus = mccc::AsyncBus<BpPayload>;
 using BpEnvelope = mccc::MessageEnvelope<BpPayload>;

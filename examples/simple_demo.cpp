@@ -11,13 +11,12 @@
 #ifndef LOG_LEVEL
 #define LOG_LEVEL LOG_LEVEL_INFO
 #endif
-#include "log_macro.hpp"
 #include "example_types.hpp"
-
-#include <mccc/component.hpp>
+#include "log_macro.hpp"
 
 #include <atomic>
 #include <chrono>
+#include <mccc/component.hpp>
 #include <thread>
 
 using namespace example;
@@ -42,23 +41,20 @@ int main() {
   });
 
   // Subscribe to MotionData
-  ExampleBus::Instance().Subscribe<MotionData>(
-      [](const ExampleEnvelope& env) {
-        const auto* data = std::get_if<MotionData>(&env.payload);
-        if (data != nullptr) {
-          LOG_INFO("Received MotionData: x=%.1f y=%.1f z=%.1f vel=%.1f",
-                   data->x, data->y, data->z, data->velocity);
-        }
-      });
+  ExampleBus::Instance().Subscribe<MotionData>([](const ExampleEnvelope& env) {
+    const auto* data = std::get_if<MotionData>(&env.payload);
+    if (data != nullptr) {
+      LOG_INFO("Received MotionData: x=%.1f y=%.1f z=%.1f vel=%.1f", data->x, data->y, data->z, data->velocity);
+    }
+  });
 
   // Subscribe to SystemLog
-  ExampleBus::Instance().Subscribe<SystemLog>(
-      [](const ExampleEnvelope& env) {
-        const auto* log = std::get_if<SystemLog>(&env.payload);
-        if (log != nullptr) {
-          LOG_INFO("Received SystemLog: level=%d content=%s", log->level, log->content.c_str());
-        }
-      });
+  ExampleBus::Instance().Subscribe<SystemLog>([](const ExampleEnvelope& env) {
+    const auto* log = std::get_if<SystemLog>(&env.payload);
+    if (log != nullptr) {
+      LOG_INFO("Received SystemLog: level=%d content=%s", log->level, log->content.c_str());
+    }
+  });
 
   // Publish some messages
   LOG_INFO("");

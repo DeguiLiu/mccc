@@ -8,6 +8,8 @@ FetchContent_MakeAvailable(Catch2)
 
 include(Catch)
 
+find_package(Threads REQUIRED)
+
 add_executable(mccc_tests
     test_fixed_containers.cpp
     test_ring_buffer.cpp
@@ -18,7 +20,7 @@ add_executable(mccc_tests
     test_stability.cpp
     test_edge_cases.cpp
     test_copy_move.cpp)
-target_link_libraries(mccc_tests Catch2::Catch2WithMain mccc pthread)
+target_link_libraries(mccc_tests Catch2::Catch2WithMain mccc Threads::Threads)
 catch_discover_tests(mccc_tests)
 
 # SPSC mode test target (excludes multi-producer tests)
@@ -31,6 +33,6 @@ add_executable(mccc_tests_spsc
     test_stability.cpp
     test_edge_cases.cpp
     test_copy_move.cpp)
-target_link_libraries(mccc_tests_spsc Catch2::Catch2WithMain mccc pthread)
+target_link_libraries(mccc_tests_spsc Catch2::Catch2WithMain mccc Threads::Threads)
 target_compile_definitions(mccc_tests_spsc PRIVATE MCCC_SINGLE_PRODUCER=1)
 catch_discover_tests(mccc_tests_spsc)

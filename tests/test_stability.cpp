@@ -8,13 +8,13 @@
  * - Sustained throughput over time
  */
 
-#include <catch2/catch_test_macros.hpp>
-#include <mccc/mccc.hpp>
+#include <cmath>
 
 #include <algorithm>
 #include <atomic>
+#include <catch2/catch_test_macros.hpp>
 #include <chrono>
-#include <cmath>
+#include <mccc/mccc.hpp>
 #include <numeric>
 #include <thread>
 #include <vector>
@@ -23,7 +23,9 @@
 // Test types
 // ============================================================================
 
-struct StabMsg { uint32_t seq; };
+struct StabMsg {
+  uint32_t seq;
+};
 using StabPayload = std::variant<StabMsg>;
 using StabBus = mccc::AsyncBus<StabPayload>;
 using StabEnvelope = mccc::MessageEnvelope<StabPayload>;
@@ -48,7 +50,8 @@ struct Stats {
 
 static Stats ComputeStats(std::vector<double>& data) {
   Stats s{};
-  if (data.empty()) return s;
+  if (data.empty())
+    return s;
 
   std::sort(data.begin(), data.end());
 
@@ -133,9 +136,8 @@ TEST_CASE("Throughput stability over 10 rounds (BARE_METAL)", "[Stability]") {
   bus.Unsubscribe(handle);
   bus.SetPerformanceMode(StabBus::PerformanceMode::FULL_FEATURED);
 
-  INFO("Throughput (M/s): mean=" << s.mean << " stddev=" << s.stddev
-       << " min=" << s.min_val << " max=" << s.max_val
-       << " p50=" << s.p50 << " p95=" << s.p95);
+  INFO("Throughput (M/s): mean=" << s.mean << " stddev=" << s.stddev << " min=" << s.min_val << " max=" << s.max_val
+                                 << " p50=" << s.p50 << " p95=" << s.p95);
 
   // Coefficient of variation should be < 50% (stable throughput)
   double cv = (s.mean > 0.0) ? (s.stddev / s.mean) : 1.0;
@@ -197,8 +199,7 @@ TEST_CASE("Throughput stability over 10 rounds (FULL_FEATURED)", "[Stability]") 
 
   bus.Unsubscribe(handle);
 
-  INFO("Throughput (M/s): mean=" << s.mean << " stddev=" << s.stddev
-       << " min=" << s.min_val << " max=" << s.max_val);
+  INFO("Throughput (M/s): mean=" << s.mean << " stddev=" << s.stddev << " min=" << s.min_val << " max=" << s.max_val);
 
   double cv = (s.mean > 0.0) ? (s.stddev / s.mean) : 1.0;
   INFO("CV: " << cv);
@@ -216,9 +217,8 @@ TEST_CASE("Sustained throughput - 2 seconds continuous", "[Stability]") {
 
   std::atomic<uint64_t> consumed{0U};
 
-  auto handle = bus.Subscribe<StabMsg>([&consumed](const StabEnvelope&) {
-    consumed.fetch_add(1U, std::memory_order_relaxed);
-  });
+  auto handle =
+      bus.Subscribe<StabMsg>([&consumed](const StabEnvelope&) { consumed.fetch_add(1U, std::memory_order_relaxed); });
 
   std::atomic<bool> stop{false};
   std::thread consumer([&bus, &stop]() {
@@ -300,8 +300,7 @@ TEST_CASE("Enqueue latency percentiles (10K samples)", "[Stability]") {
     StabMsg msg{i};
     bus.Publish(std::move(msg), 1U);
     auto t1 = std::chrono::steady_clock::now();
-    latencies.push_back(
-        static_cast<double>(std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count()));
+    latencies.push_back(static_cast<double>(std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count()));
   }
 
   stop.store(true, std::memory_order_release);
@@ -312,12 +311,16 @@ TEST_CASE("Enqueue latency percentiles (10K samples)", "[Stability]") {
   bus.Unsubscribe(handle);
   bus.SetPerformanceMode(StabBus::PerformanceMode::FULL_FEATURED);
 
-  INFO("Enqueue latency (ns): mean=" << s.mean
-       << " p50=" << s.p50 << " p95=" << s.p95 << " p99=" << s.p99
-       << " max=" << s.max_val);
+  INFO("Enqueue latency (ns): mean=" << s.mean << " p50=" << s.p50 << " p95=" << s.p95 << " p99=" << s.p99
+                                     << " max=" << s.max_val);
 
-  // P50 should be under 1 microsecond
+  // P50 should be under 1 microsecond (relaxed under sanitizers due to overhead)
+#if defined(__SANITIZE_THREAD__) || defined(__SANITIZE_ADDRESS__)
+  REQUIRE(s.p50 < 5000.0);
+  REQUIRE(s.p99 < 50000.0);
+#else
   REQUIRE(s.p50 < 1000.0);
   // P99 should be under 10 microseconds
   REQUIRE(s.p99 < 10000.0);
+#endif
 }

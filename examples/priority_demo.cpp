@@ -9,16 +9,15 @@
 #ifndef LOG_LEVEL
 #define LOG_LEVEL LOG_LEVEL_INFO
 #endif
-#include "log_macro.hpp"
 #include "example_types.hpp"
-
-#include <mccc/component.hpp>
+#include "log_macro.hpp"
 
 #include <cstring>
 
 #include <atomic>
 #include <chrono>
 #include <iostream>
+#include <mccc/component.hpp>
 #include <thread>
 
 using namespace example;
@@ -134,8 +133,10 @@ class MessageConsumer : public ExampleComponent {
 
   void init() noexcept {
     InitializeComponent();
-    SubscribeSafe<MotionData>([](std::shared_ptr<ExampleComponent>, const MotionData&, const MessageHeader&) noexcept {});
-    SubscribeSafe<CameraFrame>([](std::shared_ptr<ExampleComponent>, const CameraFrame&, const MessageHeader&) noexcept {});
+    SubscribeSafe<MotionData>(
+        [](std::shared_ptr<ExampleComponent>, const MotionData&, const MessageHeader&) noexcept {});
+    SubscribeSafe<CameraFrame>(
+        [](std::shared_ptr<ExampleComponent>, const CameraFrame&, const MessageHeader&) noexcept {});
     SubscribeSafe<SystemLog>([](std::shared_ptr<ExampleComponent>, const SystemLog&, const MessageHeader&) noexcept {});
   }
 };
@@ -164,10 +165,14 @@ void run_stress_test() {
   LOG_INFO("Sending 200,000 messages (10%% HIGH, 60%% MEDIUM, 30%% LOW)");
 
   for (int i = 0; i < 200000; ++i) {
-    if (i % 10 == 0) producer1->send_critical_message();
-    if (i % 10 < 6) producer2->send_normal_message();
-    if (i % 10 < 3) producer3->send_debug_message();
-    if (i % 100 == 0) std::this_thread::sleep_for(std::chrono::microseconds(1));
+    if (i % 10 == 0)
+      producer1->send_critical_message();
+    if (i % 10 < 6)
+      producer2->send_normal_message();
+    if (i % 10 < 3)
+      producer3->send_debug_message();
+    if (i % 100 == 0)
+      std::this_thread::sleep_for(std::chrono::microseconds(1));
   }
 
   LOG_INFO("Messages sent. Waiting for processing...");
@@ -192,20 +197,28 @@ void run_demo_mode() {
 
   LOG_INFO("Phase 1: Normal load");
   for (int i = 0; i < 10000; ++i) {
-    if (i % 10 == 0) producer1->send_critical_message();
-    if (i % 10 < 6) producer2->send_normal_message();
-    if (i % 10 < 3) producer3->send_debug_message();
-    if (i % 20 == 0) std::this_thread::sleep_for(std::chrono::microseconds(10));
+    if (i % 10 == 0)
+      producer1->send_critical_message();
+    if (i % 10 < 6)
+      producer2->send_normal_message();
+    if (i % 10 < 3)
+      producer3->send_debug_message();
+    if (i % 20 == 0)
+      std::this_thread::sleep_for(std::chrono::microseconds(10));
   }
   std::this_thread::sleep_for(std::chrono::milliseconds(500));
   monitor->display_statistics(false);
 
   LOG_INFO("Phase 2: High load");
   for (int i = 0; i < 50000; ++i) {
-    if (i % 10 == 0) producer1->send_critical_message();
-    if (i % 10 < 6) producer2->send_normal_message();
-    if (i % 10 < 3) producer3->send_debug_message();
-    if (i % 20 == 0) std::this_thread::sleep_for(std::chrono::microseconds(2));
+    if (i % 10 == 0)
+      producer1->send_critical_message();
+    if (i % 10 < 6)
+      producer2->send_normal_message();
+    if (i % 10 < 3)
+      producer3->send_debug_message();
+    if (i % 20 == 0)
+      std::this_thread::sleep_for(std::chrono::microseconds(2));
   }
   std::this_thread::sleep_for(std::chrono::milliseconds(500));
   monitor->display_statistics(false);

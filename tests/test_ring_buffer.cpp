@@ -3,17 +3,22 @@
  * @brief Unit tests for AsyncBus ring buffer correctness.
  */
 
+#include <atomic>
 #include <catch2/catch_test_macros.hpp>
 #include <mccc/mccc.hpp>
-
-#include <atomic>
 #include <thread>
 #include <vector>
 
 // Test message types
-struct TestMsgA { int value; };
-struct TestMsgB { float data; };
-struct TestMsgC { uint32_t id; };
+struct TestMsgA {
+  int value;
+};
+struct TestMsgB {
+  float data;
+};
+struct TestMsgC {
+  uint32_t id;
+};
 
 using TestPayload = std::variant<TestMsgA, TestMsgB, TestMsgC>;
 using TestBus = mccc::AsyncBus<TestPayload>;
@@ -59,9 +64,8 @@ TEST_CASE("Multiple messages in sequence", "[RingBuffer]") {
 
   std::atomic<uint32_t> count{0U};
 
-  auto handle = bus.Subscribe<TestMsgA>([&count](const TestEnvelope&) {
-    count.fetch_add(1U, std::memory_order_relaxed);
-  });
+  auto handle =
+      bus.Subscribe<TestMsgA>([&count](const TestEnvelope&) { count.fetch_add(1U, std::memory_order_relaxed); });
 
   constexpr uint32_t N = 1000U;
   for (uint32_t i = 0U; i < N; ++i) {
@@ -90,9 +94,8 @@ TEST_CASE("Multi-producer concurrent publish", "[RingBuffer]") {
 
   std::atomic<uint32_t> received{0U};
 
-  auto handle = bus.Subscribe<TestMsgA>([&received](const TestEnvelope&) {
-    received.fetch_add(1U, std::memory_order_relaxed);
-  });
+  auto handle =
+      bus.Subscribe<TestMsgA>([&received](const TestEnvelope&) { received.fetch_add(1U, std::memory_order_relaxed); });
 
   constexpr uint32_t MSGS_PER_THREAD = 5000U;
   constexpr uint32_t NUM_THREADS = 4U;
@@ -110,7 +113,7 @@ TEST_CASE("Multi-producer concurrent publish", "[RingBuffer]") {
   // Start producer threads
   std::vector<std::thread> producers;
   for (uint32_t t = 0U; t < NUM_THREADS; ++t) {
-    producers.emplace_back([&bus, t]() {
+    producers.emplace_back([&bus, t, MSGS_PER_THREAD]() {
       for (uint32_t i = 0U; i < MSGS_PER_THREAD; ++i) {
         TestMsgA msg{static_cast<int>(t * MSGS_PER_THREAD + i)};
         bus.Publish(std::move(msg), t);
@@ -144,13 +147,11 @@ TEST_CASE("Different message types dispatch correctly", "[RingBuffer]") {
   std::atomic<int> a_count{0};
   std::atomic<int> b_count{0};
 
-  auto ha = bus.Subscribe<TestMsgA>([&a_count](const TestEnvelope&) {
-    a_count.fetch_add(1, std::memory_order_relaxed);
-  });
+  auto ha =
+      bus.Subscribe<TestMsgA>([&a_count](const TestEnvelope&) { a_count.fetch_add(1, std::memory_order_relaxed); });
 
-  auto hb = bus.Subscribe<TestMsgB>([&b_count](const TestEnvelope&) {
-    b_count.fetch_add(1, std::memory_order_relaxed);
-  });
+  auto hb =
+      bus.Subscribe<TestMsgB>([&b_count](const TestEnvelope&) { b_count.fetch_add(1, std::memory_order_relaxed); });
 
   TestMsgA a{1};
   TestMsgB b{2.0f};

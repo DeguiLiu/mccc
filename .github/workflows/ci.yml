@@ -110,7 +110,12 @@ jobs:
 
     - name: Run Tests
       working-directory: build
-      run: ctest --output-on-failure --verbose
+      run: |
+        if [ "${{ matrix.sanitizer }}" = "thread" ]; then
+          ctest --output-on-failure --verbose -E "Throughput stability|latency percentiles"
+        else
+          ctest --output-on-failure --verbose
+        fi
 
   code-quality:
     runs-on: ubuntu-latest

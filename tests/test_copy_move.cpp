@@ -7,10 +7,9 @@
  * to ensure the bus doesn't introduce unnecessary overhead.
  */
 
+#include <atomic>
 #include <catch2/catch_test_macros.hpp>
 #include <mccc/mccc.hpp>
-
-#include <atomic>
 
 // ============================================================================
 // CopyMoveCounter - tracks copy/move operations
@@ -21,13 +20,10 @@ struct CopyMoveCounter {
   int copy_count;
   int move_count;
 
-  explicit CopyMoveCounter(int v = 0) noexcept
-      : value(v), copy_count(0), move_count(0) {}
+  explicit CopyMoveCounter(int v = 0) noexcept : value(v), copy_count(0), move_count(0) {}
 
   CopyMoveCounter(const CopyMoveCounter& other) noexcept
-      : value(other.value),
-        copy_count(other.copy_count + 1),
-        move_count(other.move_count) {}
+      : value(other.value), copy_count(other.copy_count + 1), move_count(other.move_count) {}
 
   CopyMoveCounter& operator=(const CopyMoveCounter& other) noexcept {
     if (this != &other) {
@@ -39,9 +35,7 @@ struct CopyMoveCounter {
   }
 
   CopyMoveCounter(CopyMoveCounter&& other) noexcept
-      : value(other.value),
-        copy_count(other.copy_count),
-        move_count(other.move_count + 1) {}
+      : value(other.value), copy_count(other.copy_count), move_count(other.move_count + 1) {}
 
   CopyMoveCounter& operator=(CopyMoveCounter&& other) noexcept {
     if (this != &other) {
@@ -53,7 +47,9 @@ struct CopyMoveCounter {
   }
 };
 
-struct DummyMsg { int x; };
+struct DummyMsg {
+  int x;
+};
 
 using CmPayload = std::variant<CopyMoveCounter, DummyMsg>;
 using CmBus = mccc::AsyncBus<CmPayload>;
