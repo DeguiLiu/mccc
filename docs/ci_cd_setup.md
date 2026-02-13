@@ -20,9 +20,8 @@ Tests the project across multiple platforms and build types:
 |----|----------|-------------|
 | Ubuntu | GCC | Debug, Release |
 | macOS | Clang | Debug, Release |
-| Windows | MSVC | Debug, Release |
 
-**Total configurations**: 6 (3 OS × 2 build types)
+**Total configurations**: 4 (2 OS × 2 build types)
 
 #### Build with Compile-Time Options
 
@@ -147,10 +146,6 @@ sudo apt-get install cmake clang-format lcov
 
 # macOS
 brew install cmake clang-format lcov
-
-# Windows
-# Use chocolatey or install manually
-choco install cmake
 ```
 
 ### Running Tests Locally

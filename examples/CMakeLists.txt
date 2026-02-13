@@ -1,44 +1,30 @@
-find_package(Threads REQUIRED)
-
 add_executable(mccc_simple_demo simple_demo.cpp)
-target_link_libraries(mccc_simple_demo mccc_extras Threads::Threads)
+target_link_libraries(mccc_simple_demo mccc_extras pthread)
 
 add_executable(mccc_priority_demo priority_demo.cpp)
-target_link_libraries(mccc_priority_demo mccc_extras Threads::Threads)
+target_link_libraries(mccc_priority_demo mccc_extras pthread)
 
 add_executable(mccc_benchmark benchmark.cpp)
-target_link_libraries(mccc_benchmark mccc_extras Threads::Threads)
-target_compile_options(mccc_benchmark PRIVATE
-    $<$<CXX_COMPILER_ID:GNU,Clang>:-O3 -march=native>
-    $<$<CXX_COMPILER_ID:MSVC>:/O2>
-)
+target_link_libraries(mccc_benchmark mccc_extras pthread)
+target_compile_options(mccc_benchmark PRIVATE -O3 -march=native)
 
 add_executable(mccc_benchmark_spsc benchmark.cpp)
-target_link_libraries(mccc_benchmark_spsc mccc_extras Threads::Threads)
-target_compile_options(mccc_benchmark_spsc PRIVATE
-    $<$<CXX_COMPILER_ID:GNU,Clang>:-O3 -march=native>
-    $<$<CXX_COMPILER_ID:MSVC>:/O2>
-)
+target_link_libraries(mccc_benchmark_spsc mccc_extras pthread)
+target_compile_options(mccc_benchmark_spsc PRIVATE -O3 -march=native)
 target_compile_definitions(mccc_benchmark_spsc PRIVATE MCCC_SINGLE_PRODUCER=1)
 
 add_executable(mccc_benchmark_sc benchmark.cpp)
-target_link_libraries(mccc_benchmark_sc mccc_extras Threads::Threads)
-target_compile_options(mccc_benchmark_sc PRIVATE
-    $<$<CXX_COMPILER_ID:GNU,Clang>:-O3 -march=native>
-    $<$<CXX_COMPILER_ID:MSVC>:/O2>
-)
+target_link_libraries(mccc_benchmark_sc mccc_extras pthread)
+target_compile_options(mccc_benchmark_sc PRIVATE -O3 -march=native)
 target_compile_definitions(mccc_benchmark_sc PRIVATE MCCC_SINGLE_CORE=1 MCCC_I_KNOW_SINGLE_CORE_IS_UNSAFE=1)
 
 add_executable(mccc_benchmark_spsc_sc benchmark.cpp)
-target_link_libraries(mccc_benchmark_spsc_sc mccc_extras Threads::Threads)
-target_compile_options(mccc_benchmark_spsc_sc PRIVATE
-    $<$<CXX_COMPILER_ID:GNU,Clang>:-O3 -march=native>
-    $<$<CXX_COMPILER_ID:MSVC>:/O2>
-)
+target_link_libraries(mccc_benchmark_spsc_sc mccc_extras pthread)
+target_compile_options(mccc_benchmark_spsc_sc PRIVATE -O3 -march=native)
 target_compile_definitions(mccc_benchmark_spsc_sc PRIVATE MCCC_SINGLE_PRODUCER=1 MCCC_SINGLE_CORE=1 MCCC_I_KNOW_SINGLE_CORE_IS_UNSAFE=1)
 
 add_executable(mccc_hsm_demo hsm_demo.cpp)
-target_link_libraries(mccc_hsm_demo mccc_extras Threads::Threads)
+target_link_libraries(mccc_hsm_demo mccc_extras pthread)
 
 # --- Competitive Benchmark (optional, requires external dependencies) ---
 option(MCCC_BUILD_COMPETITIVE_BENCH "Build competitive benchmark (downloads eventpp, EnTT, sigslot, ZeroMQ)" OFF)
@@ -92,7 +78,7 @@ if(MCCC_BUILD_COMPETITIVE_BENCH)
 
     # MPSC competitive benchmark
     add_executable(mccc_competitive_bench competitive_benchmark.cpp)
-    target_link_libraries(mccc_competitive_bench PRIVATE mccc Threads::Threads libzmq-static)
+    target_link_libraries(mccc_competitive_bench PRIVATE mccc pthread libzmq-static)
     target_include_directories(mccc_competitive_bench PRIVATE
         ${eventpp_SOURCE_DIR}/include
         ${entt_SOURCE_DIR}/src
@@ -100,14 +86,11 @@ if(MCCC_BUILD_COMPETITIVE_BENCH)
         ${cppzmq_SOURCE_DIR}
         ${libzmq_SOURCE_DIR}/include
     )
-    target_compile_options(mccc_competitive_bench PRIVATE
-        $<$<CXX_COMPILER_ID:GNU,Clang>:-O3 -march=native>
-        $<$<CXX_COMPILER_ID:MSVC>:/O2>
-    )
+    target_compile_options(mccc_competitive_bench PRIVATE -O3 -march=native)
 
     # SPSC competitive benchmark
     add_executable(mccc_competitive_bench_spsc competitive_benchmark.cpp)
-    target_link_libraries(mccc_competitive_bench_spsc PRIVATE mccc Threads::Threads libzmq-static)
+    target_link_libraries(mccc_competitive_bench_spsc PRIVATE mccc pthread libzmq-static)
     target_include_directories(mccc_competitive_bench_spsc PRIVATE
         ${eventpp_SOURCE_DIR}/include
         ${entt_SOURCE_DIR}/src
@@ -115,9 +98,6 @@ if(MCCC_BUILD_COMPETITIVE_BENCH)
         ${cppzmq_SOURCE_DIR}
         ${libzmq_SOURCE_DIR}/include
     )
-    target_compile_options(mccc_competitive_bench_spsc PRIVATE
-        $<$<CXX_COMPILER_ID:GNU,Clang>:-O3 -march=native>
-        $<$<CXX_COMPILER_ID:MSVC>:/O2>
-    )
+    target_compile_options(mccc_competitive_bench_spsc PRIVATE -O3 -march=native)
     target_compile_definitions(mccc_competitive_bench_spsc PRIVATE MCCC_SINGLE_PRODUCER=1)
 endif()
