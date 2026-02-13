@@ -1,0 +1,54 @@
+name: Code Coverage
+
+on:
+  push:
+    branches: [ master, main ]
+  pull_request:
+    branches: [ master, main ]
+
+permissions:
+  contents: read
+
+jobs:
+  coverage:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install Dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y lcov
+
+    - name: Set up CMake
+      uses: lukka/get-cmake@latest
+
+    - name: Configure CMake with Coverage
+      run: |
+        cmake -B build \
+          -DCMAKE_BUILD_TYPE=Debug \
+          -DMCCC_BUILD_TESTS=ON \
+          -DCMAKE_CXX_FLAGS="--coverage -fprofile-arcs -ftest-coverage" \
+          -DCMAKE_EXE_LINKER_FLAGS="--coverage"
+
+    - name: Build
+      run: cmake --build build -j
+
+    - name: Run Tests
+      working-directory: build
+      run: ctest --output-on-failure
+
+    - name: Generate Coverage Report
+      working-directory: build
+      run: |
+        lcov --directory . --capture --output-file coverage.info
+        lcov --remove coverage.info '/usr/*' '*/tests/*' '*/examples/*' '*/build/*' --output-file coverage.info
+        lcov --list coverage.info
+
+    - name: Upload Coverage to Codecov
+      uses: codecov/codecov-action@v4
+      with:
+        file: build/coverage.info
+        fail_ci_if_error: false
+        verbose: true

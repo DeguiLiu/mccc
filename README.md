@@ -2,6 +2,10 @@
 
 # MCCC - Message-Centric Component Communication
 
+[![CI](https://github.com/DeguiLiu/mccc/actions/workflows/ci.yml/badge.svg)](https://github.com/DeguiLiu/mccc/actions/workflows/ci.yml)
+[![Code Coverage](https://github.com/DeguiLiu/mccc/actions/workflows/coverage.yml/badge.svg)](https://github.com/DeguiLiu/mccc/actions/workflows/coverage.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 Lock-free MPSC message bus designed for safety-critical embedded systems.
 
 > **Architecture**: MPSC (Multi-Producer, Single-Consumer). Multiple producer threads can safely publish messages concurrently; a single consumer thread calls `ProcessBatch()` for processing. For multiple consumers, use separate `AsyncBus` instances, one per consumer thread.
