@@ -12,7 +12,7 @@ Lock-free MPSC 消息总线，专为安全关键嵌入式系统设计。
 
 ## 特性
 
-- **Header-only**: 2 个头文件 (`mccc.hpp` + `component.hpp`)，零外部依赖，纯 C++17
+- **Header-only**: 3 个头文件 (`mccc.hpp` + `component.hpp` + `static_component.hpp`)，零外部依赖，纯 C++17
 - **Lock-free MPSC**: CAS 原子操作，无锁竞争
 - **优先级准入控制**: 系统过载时 HIGH 消息零丢失
 - **背压监控**: 四级队列健康状态 (NORMAL/WARNING/CRITICAL/FULL)
@@ -20,6 +20,7 @@ Lock-free MPSC 消息总线，专为安全关键嵌入式系统设计。
 - **类型安全**: std::variant 编译期检查
 - **MISRA C++ 合规**: 适用于汽车、航空、医疗 (C++17 子集)
 - **嵌入式深度优化**: SPSC wait-free、索引缓存、signal fence、BARE_METAL 无锁分发
+- **零开销分发**: ProcessBatchWith + CRTP StaticComponent，编译期消息路由
 
 ## 性能
 
@@ -126,6 +127,10 @@ bool Unsubscribe(const SubscriptionHandle& handle);
 // 消费
 uint32_t ProcessBatch();
 
+// 零开销分发 (编译期, 无锁, 无回调表)
+template<typename Visitor>
+uint32_t ProcessBatchWith(Visitor&& vis);
+
 // 监控
 BackpressureLevel GetBackpressureLevel() const;
 BusStatisticsSnapshot GetStatistics() const;
@@ -162,7 +167,7 @@ cmake .. -DCMAKE_CXX_FLAGS="-DMCCC_QUEUE_DEPTH=4096 -DMCCC_SINGLE_PRODUCER=1 -DM
 
 ## 测试
 
-70 个测试用例，203 个断言，覆盖:
+171 个测试用例，覆盖:
 
 | 测试文件 | 覆盖内容 |
 |---------|---------|
@@ -175,6 +180,9 @@ cmake .. -DCMAKE_CXX_FLAGS="-DMCCC_QUEUE_DEPTH=4096 -DMCCC_SINGLE_PRODUCER=1 -DM
 | test_stability | 吞吐量稳定性 (10 轮统计), 持续吞吐, 入队延迟分位数 |
 | test_edge_cases | 队列满恢复, 错误回调, NO_STATS 模式, 性能模式切换 |
 | test_copy_move | CopyMoveCounter 零拷贝验证, FixedVector 移动语义 |
+| test_fixed_function | FixedFunction SBO 类型擦除, 移动语义, 空调用 |
+| test_visitor_dispatch | ProcessBatchWith 分发, 吞吐量对比 |
+| test_static_component | CRTP StaticComponent, HasHandler trait 检测 |
 
 ```bash
 mkdir -p build && cd build
@@ -188,15 +196,16 @@ cmake .. -DCMAKE_BUILD_TYPE=Release && make -j$(nproc)
 ```
 mccc-bus/
 ├── include/mccc/
-│   ├── mccc.hpp           # 核心: FixedString, FixedVector, MessageEnvelope, AsyncBus, Priority
-│   └── component.hpp      # Component<PayloadVariant> - 安全组件基类 (可选)
+│   ├── mccc.hpp              # 核心: FixedString, FixedVector, FixedFunction, AsyncBus, Priority
+│   ├── component.hpp         # Component<PayloadVariant> - 运行时动态订阅组件 (可选)
+│   └── static_component.hpp  # StaticComponent<Derived, PayloadVariant> - CRTP 零开销组件 (可选)
 ├── examples/
 │   ├── example_types.hpp   # 示例消息类型定义
 │   ├── simple_demo.cpp     # 最小使用示例
 │   ├── priority_demo.cpp   # 优先级准入演示
 │   ├── hsm_demo.cpp        # HSM 状态机集成
 │   └── benchmark.cpp       # 性能基准测试
-├── tests/                  # 单元测试 (Catch2, 70 用例)
+├── tests/                  # 单元测试 (Catch2, 171 用例)
 ├── extras/                 # HSM, DMA BufferPool, DataToken, 日志宏
 ├── docs/                   # 设计文档、性能报告、竞品分析、API 参考
 └── CMakeLists.txt

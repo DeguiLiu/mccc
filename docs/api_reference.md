@@ -12,6 +12,7 @@
   - [MessageHeader](#messageheader)
   - [MessageEnvelope\<PayloadVariant\>](#messageenvelopepayloadvariant)
   - [make_overloaded](#make_overloaded)
+  - [FixedFunction\<Sig, Capacity\>](#fixedfunctionsig-capacity)
 - [mccc.hpp — 消息总线](#mccchpp--消息总线)
   - [AsyncBus\<PayloadVariant\>](#asyncbuspayloadvariant)
   - [发布 API](#发布-api)
@@ -23,6 +24,7 @@
   - [错误处理](#错误处理)
 - [component.hpp — 组件基类](#componenthpp--组件基类)
   - [Component\<PayloadVariant\>](#componentpayloadvariant)
+- [static_component.hpp — CRTP 零开销组件](#static_componenthpp--crtp-零开销组件)
 - [编译期配置宏](#编译期配置宏)
 - [完整示例](#完整示例)
 
@@ -250,6 +252,47 @@ std::visit(mccc::make_overloaded(
 
 ---
 
+### FixedFunction\<Sig, Capacity\>
+
+栈上固定容量类型擦除 callable，替代 `std::function`。零堆分配，`static_assert` 超容量编译失败。
+
+```cpp
+template <typename Signature, uint32_t Capacity = 48U>
+class FixedFunction;
+```
+
+**模板参数**:
+- `Signature` — 函数签名，如 `void(int)`, `int(float, float)`
+- `Capacity` — 内联存储字节数（默认 48），callable 超过此大小编译失败
+
+#### 构造函数
+
+| 签名 | 说明 |
+|------|------|
+| `FixedFunction()` | 默认构造，空状态 |
+| `FixedFunction(nullptr_t)` | 空状态 |
+| `FixedFunction(F&& f)` | 从 callable 构造（`static_assert(sizeof(F) <= Capacity)`） |
+| `FixedFunction(FixedFunction&&)` | 移动构造 |
+
+#### 成员函数
+
+| 方法 | 说明 |
+|------|------|
+| `operator bool()` | 是否持有 callable |
+| `operator()(Args...)` | 调用（空时返回 `R{}`） |
+| `operator=(FixedFunction&&)` | 移动赋值 |
+| `operator=(nullptr_t)` | 清空 |
+
+**与 std::function 对比**:
+
+| 特性 | `std::function` | `FixedFunction<Sig, 48>` |
+|------|:---:|:---:|
+| 堆分配 | 可能 (>16B) | **永不** |
+| 超容量行为 | 运行时 malloc | **编译期报错** |
+| 异常路径 | 有 | **无** |
+
+---
+
 ## mccc.hpp — 消息总线
 
 ### AsyncBus\<PayloadVariant\>
@@ -379,6 +422,40 @@ while (true) {
     bus.ProcessBatch();
     // ... 其他工作 ...
 }
+```
+
+#### ProcessBatchWith
+
+零开销编译期分发。绕过回调表和 `shared_mutex`，使用 `std::visit` 直接分发。
+
+```cpp
+template <typename Visitor>
+uint32_t ProcessBatchWith(Visitor&& vis) noexcept;
+```
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `vis` | `Visitor&&` | 可调用对象，必须处理 `PayloadVariant` 中所有类型 |
+
+**返回值**: 本次处理的消息数
+
+**与 ProcessBatch 对比**:
+
+| 操作 | ProcessBatch | ProcessBatchWith |
+|------|:---:|:---:|
+| `shared_mutex` 读锁 | 有 | **无** |
+| 回调表遍历 | 有 | **无** |
+| FixedFunction 间接调用 | 有 | **无** |
+| 可内联 | 否 | **是** |
+
+**使用方式**:
+
+```cpp
+auto visitor = mccc::make_overloaded(
+    [](const SensorData& d) { process(d); },
+    [](const MotorCmd& c) { execute(c); }
+);
+bus.ProcessBatchWith(visitor);
 ```
 
 ---
@@ -587,6 +664,61 @@ void InitializeComponent() noexcept;
 ```
 
 **注意**: `Component` 必须通过 `std::shared_ptr` 持有（因为继承了 `enable_shared_from_this`），不能在栈上或裸 `new` 构造。
+
+---
+
+## static_component.hpp — CRTP 零开销组件
+
+### StaticComponent\<Derived, PayloadVariant\>
+
+CRTP 零开销组件基类，Handler 在编译期静态分发。
+
+```cpp
+template <typename Derived, typename PayloadVariant>
+class StaticComponent;
+```
+
+**与 Component 对比**:
+
+| 特性 | Component | StaticComponent |
+|------|:---:|:---:|
+| 虚析构函数 | 有 | **无** |
+| shared_ptr / weak_ptr | 有 | **无** |
+| 运行时订阅/退订 | 有 | 无 |
+| Handler 可内联 | 否 | **是** |
+| 适用场景 | 动态订阅 | 编译期确定的处理 |
+
+#### MakeVisitor
+
+创建可传给 `ProcessBatchWith` 的 visitor。
+
+```cpp
+auto MakeVisitor() noexcept;
+```
+
+#### HasHandler\<Derived, T\>
+
+SFINAE trait，编译期检测 Derived 是否有 `Handle(const T&)` 方法。
+
+```cpp
+template <typename Derived, typename T>
+struct HasHandler;  // ::value = true/false
+```
+
+**使用示例**:
+
+```cpp
+class MySensor : public mccc::StaticComponent<MySensor, MyPayload> {
+ public:
+  void Handle(const SensorData& d) noexcept { process(d); }
+  void Handle(const MotorCmd& c) noexcept { execute(c); }
+  // LogMsg 未处理 -> 编译期忽略
+};
+
+MySensor sensor;
+auto visitor = sensor.MakeVisitor();
+bus.ProcessBatchWith(visitor);
+```
 
 ---
 

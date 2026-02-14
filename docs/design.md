@@ -467,6 +467,20 @@ if (bare_metal) {
 }
 ```
 
+### 6. ProcessBatchWith 编译期分发
+
+`ProcessBatchWith<Visitor>` 绕过回调表和 `shared_mutex`，使用 `std::visit` 将消息直接分发到用户提供的 visitor，实现全路径可内联。配合 `StaticComponent` 的 `MakeVisitor()` 使用，可消除所有间接调用开销。
+
+```cpp
+// 传统路径: ProcessBatch -> shared_lock -> 遍历 callback_table_ -> FixedFunction 间接调用
+// 零开销路径: ProcessBatchWith -> std::visit -> 编译期分发，全路径可内联
+auto visitor = mccc::make_overloaded(
+    [](const SensorData& d) { process(d); },
+    [](const MotorCmd& c) { execute(c); }
+);
+bus.ProcessBatchWith(visitor);
+```
+
 ### 4. 线程安全设计
 
 | 成员 | 同步机制 | 说明 |
@@ -605,8 +619,9 @@ MCCC 不在库内部默认嵌入计时代码。以下为**可测预算与门限*
 ```
 include/
 └── mccc/
-    ├── mccc.hpp           # 核心: FixedString, FixedVector, MessageEnvelope, AsyncBus, Priority
-    └── component.hpp      # Component<PayloadVariant> 基类 (可选)
+    ├── mccc.hpp           # 核心: FixedString, FixedVector, FixedFunction, MessageEnvelope, AsyncBus, Priority
+    ├── component.hpp      # Component<PayloadVariant> 基类 (可选)
+    └── static_component.hpp # StaticComponent<Derived, PayloadVariant> CRTP 零开销组件 (可选)
 
 examples/
 ├── example_types.hpp      # 示例消息类型定义
@@ -617,6 +632,7 @@ examples/
 
 tests/
 ├── test_fixed_containers.cpp # FixedString/FixedVector 单元测试
+├── test_fixed_function.cpp   # FixedFunction 单元测试
 ├── test_ring_buffer.cpp   # Ring Buffer 单元测试
 ├── test_subscribe.cpp     # 订阅/取消订阅测试
 ├── test_priority.cpp      # 优先级准入测试
@@ -624,7 +640,9 @@ tests/
 ├── test_multithread.cpp   # 多线程压力测试
 ├── test_stability.cpp     # 吞吐稳定性/延迟分位数测试
 ├── test_edge_cases.cpp    # 边界条件/错误恢复测试
-└── test_copy_move.cpp     # 拷贝/移动语义测试
+├── test_copy_move.cpp     # 拷贝/移动语义测试
+├── test_static_component.cpp # StaticComponent CRTP 组件测试
+└── test_visitor_dispatch.cpp # ProcessBatchWith visitor 分发测试
 
 extras/
 ├── state_machine.hpp      # HSM 层次状态机
