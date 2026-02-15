@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - GitHub Actions CI/CD workflows
-  - Multi-platform build and test (Ubuntu, macOS, Windows)
+  - Multi-platform build and test (Ubuntu, macOS)
   - Build with various compile-time configurations
   - Sanitizer tests (address, thread, undefined behavior)
   - Code formatting checks

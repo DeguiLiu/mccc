@@ -13,8 +13,8 @@ assignees: ''
 
 ## Environment
 
-- **OS**: <!-- e.g., Ubuntu 22.04, macOS 13, Windows 11 -->
-- **Compiler**: <!-- e.g., GCC 11.3, Clang 14, MSVC 2022 -->
+- **OS**: <!-- e.g., Ubuntu 22.04, macOS 13 -->
+- **Compiler**: <!-- e.g., GCC 11.3, Clang 14 -->
 - **MCCC Version/Commit**: <!-- e.g., v1.0.0 or commit SHA -->
 - **Build Type**: <!-- Debug or Release -->
 - **CMake Version**: <!-- e.g., 3.25 -->

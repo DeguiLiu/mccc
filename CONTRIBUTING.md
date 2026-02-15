@@ -32,7 +32,6 @@ Thank you for your interest in contributing to MCCC (Message-Centric Component C
 - C++17 compatible compiler:
   - GCC 7+ (Linux)
   - Clang 6+ (macOS/Linux)
-  - MSVC 2019+ (Windows)
 - clang-format (for code formatting)
 
 ### Building the Project
