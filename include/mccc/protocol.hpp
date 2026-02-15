@@ -173,8 +173,8 @@ class FixedString {
   }
 
  private:
-  char buf_[Capacity + 1U];  /**< Buffer including null terminator */
-  uint32_t size_;             /**< Current string length */
+  char buf_[Capacity + 1U]; /**< Buffer including null terminator */
+  uint32_t size_;           /**< Current string length */
 };
 
 // ============================================================================
