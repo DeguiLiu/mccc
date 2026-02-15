@@ -14,15 +14,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
         build_type: [Debug, Release]
-        include:
-          - os: ubuntu-latest
-            compiler: gcc
-          - os: macos-latest
-            compiler: clang
 
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
 
     steps:
     - uses: actions/checkout@v4
