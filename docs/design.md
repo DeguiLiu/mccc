@@ -605,9 +605,8 @@ MCCC 不在库内部默认嵌入计时代码。以下为**可测预算与门限*
 ```
 include/
 └── mccc/
-    ├── protocol.hpp       # 消息类型 + FixedString + FixedVector
-    ├── message_bus.hpp    # AsyncBus<PayloadVariant> + Lock-free Ring Buffer
-    └── component.hpp      # Component<PayloadVariant> 基类
+    ├── mccc.hpp           # 核心: FixedString, FixedVector, MessageEnvelope, AsyncBus, Priority
+    └── component.hpp      # Component<PayloadVariant> 基类 (可选)
 
 examples/
 ├── example_types.hpp      # 示例消息类型定义

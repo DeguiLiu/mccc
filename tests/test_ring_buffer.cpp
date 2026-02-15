@@ -4,7 +4,7 @@
  */
 
 #include <catch2/catch_test_macros.hpp>
-#include <mccc/message_bus.hpp>
+#include <mccc/mccc.hpp>
 
 #include <atomic>
 #include <thread>
@@ -81,6 +81,7 @@ TEST_CASE("Multiple messages in sequence", "[RingBuffer]") {
   bus.Unsubscribe(handle);
 }
 
+#if !MCCC_SINGLE_PRODUCER
 TEST_CASE("Multi-producer concurrent publish", "[RingBuffer]") {
   auto& bus = TestBus::Instance();
   bus.ResetStatistics();
@@ -133,6 +134,7 @@ TEST_CASE("Multi-producer concurrent publish", "[RingBuffer]") {
   bus.Unsubscribe(handle);
   bus.SetPerformanceMode(TestBus::PerformanceMode::FULL_FEATURED);
 }
+#endif  // !MCCC_SINGLE_PRODUCER
 
 TEST_CASE("Different message types dispatch correctly", "[RingBuffer]") {
   auto& bus = TestBus::Instance();
