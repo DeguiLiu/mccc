@@ -527,7 +527,156 @@ static void bench_zeromq() {
 }
 
 // ============================================================================
-// 8. Multi-size payload benchmark (MCCC vs eventpp vs sigslot vs ZeroMQ)
+// 8. MCCC ProcessBatchWith (zero-overhead visitor dispatch)
+// ============================================================================
+static void bench_mccc_visitor() {
+  print_header("MCCC ProcessBatchWith (zero-overhead visitor dispatch)");
+  auto& bus = BenchBus::Instance();
+
+  auto visitor = mccc::make_overloaded([](const TestMsg&) {});
+
+  // --- BARE_METAL + ProcessBatchWith ---
+  bus.SetPerformanceMode(BenchBus::PerformanceMode::BARE_METAL);
+  std::vector<double> bare_tps, bare_lats;
+  for (uint32_t r = 0; r < ROUNDS; ++r) {
+    bus.ResetStatistics();
+    while (bus.ProcessBatchWith(visitor) > 0) {}
+
+    std::atomic<bool> stop{false};
+    std::thread consumer([&]() {
+      pin_thread(CONSUMER_CORE);
+      while (!stop.load(std::memory_order_acquire)) {
+        bus.ProcessBatchWith(visitor);
+      }
+      while (bus.ProcessBatchWith(visitor) > 0) {}
+    });
+
+    pin_thread(PRODUCER_CORE);
+    auto start = Clock::now();
+    for (uint32_t i = 0; i < BENCH_MSGS; ++i) {
+      bus.Publish(TestMsg{i, 1.0f, 2.0f, 3.0f, 4.0f}, 0U);
+    }
+    auto end = Clock::now();
+    stop.store(true, std::memory_order_release);
+    consumer.join();
+
+    double elapsed_ns = static_cast<double>(duration_cast<nanoseconds>(end - start).count());
+    bare_tps.push_back(static_cast<double>(BENCH_MSGS) / elapsed_ns * 1e3);
+    bare_lats.push_back(elapsed_ns / BENCH_MSGS);
+  }
+  Stats btp = compute_stats(bare_tps);
+  Stats blat = compute_stats(bare_lats);
+  print_result("BARE_METAL E2E (Visitor):", btp, blat);
+
+  // --- FULL_FEATURED + ProcessBatchWith ---
+  bus.SetPerformanceMode(BenchBus::PerformanceMode::FULL_FEATURED);
+  std::vector<double> full_tps, full_lats;
+  for (uint32_t r = 0; r < ROUNDS; ++r) {
+    bus.ResetStatistics();
+    while (bus.ProcessBatchWith(visitor) > 0) {}
+
+    std::atomic<bool> stop{false};
+    std::thread consumer([&]() {
+      pin_thread(CONSUMER_CORE);
+      while (!stop.load(std::memory_order_acquire)) {
+        bus.ProcessBatchWith(visitor);
+      }
+      while (bus.ProcessBatchWith(visitor) > 0) {}
+    });
+
+    pin_thread(PRODUCER_CORE);
+    auto start = Clock::now();
+    for (uint32_t i = 0; i < BENCH_MSGS; ++i) {
+      bus.Publish(TestMsg{i, 1.0f, 2.0f, 3.0f, 4.0f}, 0U);
+    }
+    auto end = Clock::now();
+    stop.store(true, std::memory_order_release);
+    consumer.join();
+
+    double elapsed_ns = static_cast<double>(duration_cast<nanoseconds>(end - start).count());
+    full_tps.push_back(static_cast<double>(BENCH_MSGS) / elapsed_ns * 1e3);
+    full_lats.push_back(elapsed_ns / BENCH_MSGS);
+  }
+  Stats ftp = compute_stats(full_tps);
+  Stats flat = compute_stats(full_lats);
+  print_result("FULL_FEATURED E2E (Visitor):", ftp, flat);
+}
+
+// ============================================================================
+// 9. Pub-only throughput comparison (queue overflow analysis)
+//    Explains why FULL_FEATURED Pub-only drops from ~28 M/s to ~23 M/s
+//    when BENCH_MSGS (1M) >> MCCC_QUEUE_DEPTH (128K).
+//
+//    Variant A: 100K messages, no consumer (queue never fills)
+//    Variant B: 1M messages, consumer draining in background (queue stays unfull)
+//    Control:   1M messages, no consumer (original test — queue overflows)
+// ============================================================================
+static void bench_mccc_pubonly_comparison() {
+  print_header("MCCC Pub-only Throughput Comparison (queue overflow analysis)");
+  auto& bus = BenchBus::Instance();
+
+  static constexpr uint32_t SMALL_MSGS = 100000U;  // fits in 128K queue
+
+  auto handle = bus.Subscribe<TestMsg>([](const mccc::MessageEnvelope<BenchPayload>&) {});
+
+  auto run_pubonly = [&](const char* label, uint32_t msg_count, bool with_consumer) {
+    std::vector<double> tps;
+    for (uint32_t r = 0; r < ROUNDS; ++r) {
+      bus.ResetStatistics();
+      while (bus.ProcessBatch() > 0) {}
+
+      std::atomic<bool> stop{false};
+      std::thread consumer_thread;
+      if (with_consumer) {
+        consumer_thread = std::thread([&]() {
+          pin_thread(CONSUMER_CORE);
+          while (!stop.load(std::memory_order_acquire)) {
+            bus.ProcessBatch();
+          }
+          while (bus.ProcessBatch() > 0) {}
+        });
+      }
+
+      pin_thread(PRODUCER_CORE);
+      auto start = Clock::now();
+      for (uint32_t i = 0; i < msg_count; ++i) {
+        bus.Publish(TestMsg{i, 1.0f, 2.0f, 3.0f, 4.0f}, 0U);
+      }
+      auto end = Clock::now();
+
+      if (with_consumer) {
+        stop.store(true, std::memory_order_release);
+        consumer_thread.join();
+      } else {
+        while (bus.ProcessBatch() > 0) {}
+      }
+
+      double elapsed_ns = static_cast<double>(duration_cast<nanoseconds>(end - start).count());
+      tps.push_back(static_cast<double>(msg_count) / elapsed_ns * 1e3);
+    }
+    Stats tp = compute_stats(tps);
+    print_throughput_only(label, tp);
+  };
+
+  // --- BARE_METAL ---
+  bus.SetPerformanceMode(BenchBus::PerformanceMode::BARE_METAL);
+  std::printf("\n  [BARE_METAL]\n");
+  run_pubonly("Control: 1M no consumer", BENCH_MSGS, false);
+  run_pubonly("Variant A: 100K no consumer", SMALL_MSGS, false);
+  run_pubonly("Variant B: 1M + consumer drain", BENCH_MSGS, true);
+
+  // --- FULL_FEATURED ---
+  bus.SetPerformanceMode(BenchBus::PerformanceMode::FULL_FEATURED);
+  std::printf("\n  [FULL_FEATURED]\n");
+  run_pubonly("Control: 1M no consumer", BENCH_MSGS, false);
+  run_pubonly("Variant A: 100K no consumer", SMALL_MSGS, false);
+  run_pubonly("Variant B: 1M + consumer drain", BENCH_MSGS, true);
+
+  bus.Unsubscribe(handle);
+}
+
+// ============================================================================
+// 10. Multi-size payload benchmark (MCCC vs eventpp vs sigslot vs ZeroMQ)
 // ============================================================================
 
 // MCCC multi-size bus types
@@ -730,7 +879,7 @@ int main() {
   std::printf("    MCCC_SINGLE_CORE     = %d\n", MCCC_SINGLE_CORE);
   std::printf("    MCCC_QUEUE_DEPTH     = %d\n", MCCC_QUEUE_DEPTH);
   std::printf("  Versions:\n");
-  std::printf("    MCCC:    v1.0.0 (mccc-bus)\n");
+  std::printf("    MCCC:    v2.0.0 (mccc-bus)\n");
   std::printf("    eventpp: v0.3.0 (fork: gitee.com/liudegui/eventpp)\n");
   std::printf("    EnTT:    v3.12.2\n");
   std::printf("    sigslot: v1.2.3\n");
@@ -748,6 +897,8 @@ int main() {
 
   bench_mccc_bare();
   bench_mccc_full();
+  bench_mccc_visitor();
+  bench_mccc_pubonly_comparison();
   bench_eventpp_raw();
   bench_eventpp_pool();
   bench_eventpp_highperf();

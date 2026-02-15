@@ -41,8 +41,10 @@ static void DrainBus(MtBus& bus) {
 }
 
 // ============================================================================
-// Multi-producer stress tests
+// Multi-producer stress tests (skipped in SPSC mode)
 // ============================================================================
+
+#if !MCCC_SINGLE_PRODUCER
 
 TEST_CASE("4 producers, 1 consumer - data integrity", "[Multithread]") {
   auto& bus = MtBus::Instance();
@@ -232,6 +234,8 @@ TEST_CASE("32 producers burst - CAS contention", "[Multithread]") {
   bus.Unsubscribe(handle);
   bus.SetPerformanceMode(MtBus::PerformanceMode::FULL_FEATURED);
 }
+
+#endif  // !MCCC_SINGLE_PRODUCER
 
 // ============================================================================
 // Concurrent subscribe/unsubscribe

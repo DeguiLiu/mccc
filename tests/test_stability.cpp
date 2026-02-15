@@ -314,10 +314,14 @@ TEST_CASE("Enqueue latency percentiles (10K samples)", "[Stability]") {
   INFO("Enqueue latency (ns): mean=" << s.mean << " p50=" << s.p50 << " p95=" << s.p95 << " p99=" << s.p99
                                      << " max=" << s.max_val);
 
-  // P50 should be under 1 microsecond (relaxed under sanitizers due to overhead)
+  // P50 should be under 1 microsecond (relaxed under sanitizers and macOS due to overhead)
 #if defined(__SANITIZE_THREAD__) || defined(__SANITIZE_ADDRESS__)
   REQUIRE(s.p50 < 5000.0);
   REQUIRE(s.p99 < 50000.0);
+#elif defined(__APPLE__)
+  // macOS has higher timer overhead and scheduler latency in CI environments
+  REQUIRE(s.p50 < 2000.0);
+  REQUIRE(s.p99 < 20000.0);
 #else
   REQUIRE(s.p50 < 1000.0);
   // P99 should be under 10 microseconds

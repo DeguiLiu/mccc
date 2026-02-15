@@ -299,6 +299,46 @@ public:
 };
 ```
 
+#### FixedFunction\<Sig, Capacity\>
+
+栈上固定容量类型擦除 callable，替代 `std::function`。SBO (Small Buffer Optimization) 内联存储，超容量编译期报错：
+
+```cpp
+template <typename Signature, uint32_t Capacity = 48U>
+class FixedFunction;
+
+// 特化: FixedFunction<R(Args...), Cap>
+template <typename R, typename... Args, uint32_t Capacity>
+class FixedFunction<R(Args...), Capacity> {
+public:
+    FixedFunction() noexcept = default;
+    FixedFunction(std::nullptr_t) noexcept;
+
+    template <typename F>
+    FixedFunction(F&& f) noexcept;  // static_assert(sizeof(F) <= Capacity)
+
+    FixedFunction(FixedFunction&& other) noexcept;
+    FixedFunction& operator=(FixedFunction&& other) noexcept;
+
+    explicit operator bool() const noexcept;
+    R operator()(Args... args) const noexcept;  // 空时返回 R{}
+};
+```
+
+**与 std::function 对比**：
+
+| 特性 | `std::function` | `FixedFunction<Sig, 48>` |
+|------|:---:|:---:|
+| 堆分配 | 可能 (>16B) | **永不** |
+| 超容量行为 | 运行时 malloc | **编译期报错** |
+| 异常路径 | 有 (bad_function_call) | **无** |
+| 虚函数表 | 有 | **函数指针 Ops 表** |
+
+**设计要点**：
+- 使用 Ops 函数指针表 (destroy/move/invoke) 替代虚基类，消除虚函数表开销
+- `static_assert(sizeof(F) <= Capacity)` 确保超容量在编译期而非运行时失败
+- 回调表 `CallbackType` 已改用 `FixedFunction<void(const EnvelopeType&), 64U>`
+
 ### 5. Component\<PayloadVariant\>
 
 安全的组件基类，使用 FixedVector 管理订阅：
@@ -340,7 +380,54 @@ sequenceDiagram
     end
 ```
 
-### 6. DataToken (零拷贝令牌)
+### 6. StaticComponent\<Derived, PayloadVariant\> (CRTP 零开销组件)
+
+编译期静态分发的组件基类，配合 `ProcessBatchWith` 使用，消除所有间接调用开销：
+
+```cpp
+namespace detail {
+// SFINAE 检测 Derived 是否有 Handle(const T&) 方法
+template <typename Derived, typename T, typename = void>
+struct HasHandler : std::false_type {};
+
+template <typename Derived, typename T>
+struct HasHandler<Derived, T,
+    std::void_t<decltype(std::declval<Derived>().Handle(std::declval<const T&>()))>>
+    : std::true_type {};
+}  // namespace detail
+
+template <typename Derived, typename PayloadVariant>
+class StaticComponent {
+public:
+    auto MakeVisitor() noexcept;  // 返回编译期分发 visitor
+};
+```
+
+**与 Component 对比**：
+
+| 特性 | Component | StaticComponent |
+|------|:---:|:---:|
+| 虚析构函数 | 有 | **无** |
+| shared_ptr / weak_ptr | 有 | **无** |
+| 运行时订阅/退订 | 有 | 无 |
+| Handler 可内联 | 否 | **是** |
+| 适用场景 | 动态订阅 | 编译期确定的处理 |
+
+**使用方式**：
+```cpp
+class MySensor : public StaticComponent<MySensor, MyPayload> {
+ public:
+  void Handle(const SensorData& d) noexcept { /* 处理 */ }
+  void Handle(const MotorCmd& c) noexcept { /* 执行 */ }
+  // 未定义 Handle 的类型在编译期静默忽略
+};
+
+MySensor sensor;
+auto visitor = sensor.MakeVisitor();
+bus.ProcessBatchWith(visitor);  // 全路径可内联
+```
+
+### 7. DataToken (零拷贝令牌)
 
 使用函数指针 + 上下文替代虚基类 + unique_ptr，消除热路径堆分配：
 
@@ -370,7 +457,7 @@ private:
 };
 ```
 
-### 7. 固定回调表
+### 8. 固定回调表
 
 使用编译期类型索引 + 固定数组替代 `unordered_map<type_index, vector>`:
 
@@ -467,7 +554,21 @@ if (bare_metal) {
 }
 ```
 
-### 4. 线程安全设计
+### 6. ProcessBatchWith 编译期分发
+
+`ProcessBatchWith<Visitor>` 绕过回调表和 `shared_mutex`，使用 `std::visit` 将消息直接分发到用户提供的 visitor，实现全路径可内联。配合 `StaticComponent` 的 `MakeVisitor()` 使用，可消除所有间接调用开销。
+
+```cpp
+// 传统路径: ProcessBatch -> shared_lock -> 遍历 callback_table_ -> FixedFunction 间接调用
+// 零开销路径: ProcessBatchWith -> std::visit -> 编译期分发，全路径可内联
+auto visitor = mccc::make_overloaded(
+    [](const SensorData& d) { process(d); },
+    [](const MotorCmd& c) { execute(c); }
+);
+bus.ProcessBatchWith(visitor);
+```
+
+### 7. 线程安全设计
 
 | 成员 | 同步机制 | 说明 |
 |------|---------|------|
@@ -605,8 +706,9 @@ MCCC 不在库内部默认嵌入计时代码。以下为**可测预算与门限*
 ```
 include/
 └── mccc/
-    ├── mccc.hpp           # 核心: FixedString, FixedVector, MessageEnvelope, AsyncBus, Priority
-    └── component.hpp      # Component<PayloadVariant> 基类 (可选)
+    ├── mccc.hpp           # 核心: FixedString, FixedVector, FixedFunction, MessageEnvelope, AsyncBus, Priority
+    ├── component.hpp      # Component<PayloadVariant> 基类 (可选)
+    └── static_component.hpp # StaticComponent<Derived, PayloadVariant> CRTP 零开销组件 (可选)
 
 examples/
 ├── example_types.hpp      # 示例消息类型定义
@@ -617,6 +719,7 @@ examples/
 
 tests/
 ├── test_fixed_containers.cpp # FixedString/FixedVector 单元测试
+├── test_fixed_function.cpp   # FixedFunction 单元测试
 ├── test_ring_buffer.cpp   # Ring Buffer 单元测试
 ├── test_subscribe.cpp     # 订阅/取消订阅测试
 ├── test_priority.cpp      # 优先级准入测试
@@ -624,7 +727,9 @@ tests/
 ├── test_multithread.cpp   # 多线程压力测试
 ├── test_stability.cpp     # 吞吐稳定性/延迟分位数测试
 ├── test_edge_cases.cpp    # 边界条件/错误恢复测试
-└── test_copy_move.cpp     # 拷贝/移动语义测试
+├── test_copy_move.cpp     # 拷贝/移动语义测试
+├── test_static_component.cpp # StaticComponent CRTP 组件测试
+└── test_visitor_dispatch.cpp # ProcessBatchWith visitor 分发测试
 
 extras/
 ├── state_machine.hpp      # HSM 层次状态机

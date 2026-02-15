@@ -2,7 +2,7 @@
 
 > 基于本机统一测试的性能对标与特性对比
 >
-> 测试日期: 2025-02 (优化后重测, MPSC + SPSC 完整矩阵)
+> 测试日期: 2025-02 初测, 2026-02 重测 (v2.0.0, 新增 ProcessBatchWith 零开销分发, MPSC/SPSC 顺序独立运行)
 
 ---
 
@@ -30,7 +30,7 @@
 | [zeromq/libzmq](https://github.com/zeromq/libzmq) | ~10,000 | IPC/网络消息 | C/C++ | MPL-2.0 | v4.3.5 |
 | [QuantumLeaps/qpcpp](https://github.com/QuantumLeaps/qpcpp) | ~800 | Active Object 框架 | C++11 | GPL/商业 | v8.1.2 |
 
-> **对比基线**: MCCC 核心代码 **1,179 行** (2 个头文件: `mccc.hpp` + `component.hpp`), 纯 C++17, MIT 许可证
+> **对比基线**: MCCC 核心代码 **1,535 行** (3 个头文件: `mccc.hpp` + `component.hpp` + `static_component.hpp`), 纯 C++17, MIT 许可证
 
 ### 下载地址
 
@@ -135,32 +135,32 @@ g++ -std=c++17 -O3 -march=native -DMCCC_SINGLE_PRODUCER=1 \
 ```mermaid
 xychart-beta
     title "入队吞吐量对比 (M msg/s, 本机实测)"
-    x-axis ["EnTT", "SPSC-B", "MPSC-B", "sigslot", "MPSC-F", "SPSC-F", "epp-HP", "epp-Raw", "epp-Pool", "ZMQ"]
+    x-axis ["EnTT", "MPSC-B", "SPSC-B", "sigslot", "MPSC-F", "SPSC-F", "epp-HP", "epp-Raw", "epp-Pool", "ZMQ"]
     y-axis "M msg/s" 0 --> 120
-    bar [113.43, 33.32, 32.44, 20.62, 19.49, 18.36, 6.63, 4.85, 4.79, 4.65]
+    bar [115.07, 31.09, 33.42, 25.92, 20.61, 20.33, 6.95, 5.11, 4.90, 4.48]
 ```
 
 | 实现 | 入队吞吐量 (M/s) | 入队延迟 (ns) | 测试模式 | 备注 |
 |------|:-----------:|:------------:|----------|------|
-| **EnTT dispatcher** | **113.43 ± 29.11** | 5 | 单线程 enqueue+update | 无线程安全, 无队列开销 |
-| **MCCC SPSC BARE_METAL** | **33.32 ± 0.57** | 30 | Publish-only | Wait-free, 无 CAS |
-| **MCCC MPSC BARE_METAL** | **32.44 ± 0.66** | 31 | Publish-only | CAS, 无优先级/统计 |
-| **sigslot** | **20.62 ± 0.48** | 48 | 同步 emit | 无队列, 直接函数调用 |
-| **MCCC MPSC FULL_FEATURED** | **19.49 ± 0.59** | 52 | Publish-only | CAS + 优先级 + 背压 + 统计 |
-| **MCCC SPSC FULL_FEATURED** | **18.36 ± 0.40** | 55 | Publish-only | Wait-free + 优先级 + 背压 + 统计 |
-| **eventpp HighPerf** | **6.63 ± 0.54** | 31 | 单线程 enqueue+process | SpinLock + CAS 池分配 + shared_mutex |
-| **eventpp Raw** | **4.85 ± 0.27** | 52 | 单线程 enqueue+process | std::mutex + std::list |
-| **eventpp Pool** | **4.79 ± 0.11** | 55 | 单线程 enqueue+process | std::mutex + lock-free CAS 池分配 |
-| **ZeroMQ inproc** | **4.65 ± 0.20** | 210 | 双线程 push/pull | Socket 协议栈开销 |
+| **EnTT dispatcher** | **115.07 ± 29.55** | 4 | 单线程 enqueue+update | 无线程安全, 无队列开销 |
+| **MCCC SPSC BARE_METAL** | **33.42 ± 1.00** | 30 | Publish-only | Wait-free, 无 CAS |
+| **MCCC MPSC BARE_METAL** | **31.09 ± 0.78** | 32 | Publish-only | CAS, 无优先级/统计 |
+| **sigslot** | **25.92 ± 0.56** | 38 | 同步 emit | 无队列, 直接函数调用 |
+| **MCCC MPSC FULL_FEATURED** | **20.61 ± 0.77** | 48 | Publish-only | CAS + 优先级 + 背压 + 统计 |
+| **MCCC SPSC FULL_FEATURED** | **20.33 ± 0.38** | 49 | Publish-only | Wait-free + 优先级 + 背压 + 统计 |
+| **eventpp HighPerf** | **6.95 ± 0.49** | 30 | 单线程 enqueue+process | SpinLock + CAS 池分配 + shared_mutex |
+| **eventpp Raw** | **5.11 ± 0.31** | 49 | 单线程 enqueue+process | std::mutex + std::list |
+| **eventpp Pool** | **4.90 ± 0.11** | 54 | 单线程 enqueue+process | std::mutex + lock-free CAS 池分配 |
+| **ZeroMQ inproc** | **4.48 ± 0.28** | 221 | 双线程 push/pull | Socket 协议栈开销 |
 
 #### E2E 吞吐量 (pub+consume 并发)
 
 | 实现 | E2E 吞吐量 (M/s) | 延迟 (ns) | 测试模式 | 备注 |
 |------|:-----------:|:------------:|----------|------|
-| **MCCC SPSC BARE_METAL** | **17.78 ± 1.23** | 54 | 双线程 pub+consume | Wait-free, 无 CAS |
-| **MCCC MPSC BARE_METAL** | **16.55 ± 0.39** | 60 | 双线程 pub+consume | CAS, 无优先级/统计 |
-| **MCCC SPSC FULL_FEATURED** | **8.58 ± 0.14** | 116 | 双线程 pub+consume | Wait-free + 优先级 + 背压 + 统计 |
-| **MCCC MPSC FULL_FEATURED** | **6.32 ± 0.12** | 157 | 双线程 pub+consume | CAS + 优先级 + 背压 + 统计 |
+| **MCCC SPSC BARE_METAL** | **18.85 ± 0.67** | 53 | 双线程 pub+consume | Wait-free, 无 CAS |
+| **MCCC MPSC BARE_METAL** | **16.46 ± 1.28** | 59 | 双线程 pub+consume | CAS, 无优先级/统计 |
+| **MCCC SPSC FULL_FEATURED** | **7.04 ± 0.15** | 143 | 双线程 pub+consume | Wait-free + 优先级 + 背压 + 统计 |
+| **MCCC MPSC FULL_FEATURED** | **6.82 ± 0.20** | 148 | 双线程 pub+consume | CAS + 优先级 + 背压 + 统计 |
 
 > E2E 吞吐量受消费者处理速度约束 (ProcessBatch + shared_mutex 读锁 + 回调分发)，因此低于入队吞吐量。
 
@@ -172,23 +172,23 @@ xychart-beta
 ```mermaid
 xychart-beta
     title "入队延迟 P50 对比 (ns)"
-    x-axis ["EnTT", "SPSC-B", "MPSC-B", "epp-HP", "sigslot", "MPSC-F", "SPSC-F", "epp-Raw", "epp-Pool", "ZMQ"]
+    x-axis ["EnTT", "epp-HP", "MPSC-B", "SPSC-B", "sigslot", "MPSC-F", "epp-Raw", "epp-Pool", "SPSC-F", "ZMQ"]
     y-axis "ns" 0 --> 250
-    bar [5, 30, 31, 31, 48, 52, 55, 52, 55, 210]
+    bar [4, 30, 32, 30, 38, 48, 49, 54, 49, 221]
 ```
 
 | 实现 | P50 (ns) | P95 (ns) | P99 (ns) | 说明 |
 |------|:--------:|:--------:|:--------:|------|
-| **EnTT** | 5 | 6 | 6 | 单线程, vector push_back |
-| **MCCC SPSC BARE_METAL** | 30 | 30 | 30 | Wait-free store + 序列号同步 |
-| **MCCC MPSC BARE_METAL** | 31 | 32 | 32 | CAS 原子操作 + 序列号同步 |
-| **eventpp HighPerf** | 31 | 34 | 34 | SpinLock + CAS 池分配 + shared_mutex |
-| **sigslot** | 48 | 50 | 50 | 同步调用, mutex 保护 |
-| **MCCC MPSC FULL_FEATURED** | 52 | 52 | 52 | CAS + 优先级检查 + 背压 + 统计 |
-| **MCCC SPSC FULL_FEATURED** | 55 | 56 | 56 | Wait-free + 优先级检查 + 背压 + 统计 |
-| **eventpp Raw** | 52 | 54 | 54 | std::mutex + list 节点分配 |
-| **eventpp Pool** | 55 | 56 | 56 | std::mutex + lock-free CAS 池分配 |
-| **ZeroMQ inproc** | 210 | 223 | 223 | Socket 协议栈 + 消息拷贝 |
+| **EnTT** | 4 | 5 | 5 | 单线程, vector push_back |
+| **eventpp HighPerf** | 30 | 31 | 31 | SpinLock + CAS 池分配 + shared_mutex |
+| **MCCC SPSC BARE_METAL** | 30 | 31 | 31 | Wait-free store + 序列号同步 |
+| **MCCC MPSC BARE_METAL** | 32 | 33 | 33 | CAS 原子操作 + 序列号同步 |
+| **sigslot** | 38 | 40 | 40 | 同步调用, mutex 保护 |
+| **MCCC MPSC FULL_FEATURED** | 48 | 51 | 51 | CAS + 优先级检查 + 背压 + 统计 |
+| **eventpp Raw** | 49 | 50 | 50 | std::mutex + list 节点分配 |
+| **MCCC SPSC FULL_FEATURED** | 49 | 50 | 50 | Wait-free + 优先级检查 + 背压 + 统计 |
+| **eventpp Pool** | 54 | 55 | 55 | std::mutex + lock-free CAS 池分配 |
+| **ZeroMQ inproc** | 221 | 228 | 228 | Socket 协议栈 + 消息拷贝 |
 
 ### 3.3 结果分析
 
@@ -200,15 +200,15 @@ xychart-beta
 **为什么 MCCC 入队吞吐量高于 eventpp?**
 - MCCC 使用 **Lock-free CAS** (MPSC) 或 **Wait-free store** (SPSC) 入队, eventpp 默认使用 **std::mutex** 入队 (fork 版本可选 SpinLock + try_lock 优化)
 - MCCC 的 Ring Buffer 是预分配固定内存, eventpp 默认的 std::list 需要逐节点分配 (fork 提供 PoolAllocator lock-free CAS 池分配)
-- eventpp HighPerfPolicy (SpinLock + CAS 池 + shared_mutex) 吞吐量 **6.63 M/s**, 比 Raw (4.85 M/s) 提升 **37%**, 但仍低于 MCCC BARE_METAL (32.44 M/s)
-- MCCC MPSC BARE_METAL 入队吞吐量 **32.44 M/s**, 是 eventpp HighPerf 的 **4.9x**, 是 eventpp Raw 的 **6.7x**
-- MCCC MPSC FULL_FEATURED 入队吞吐量 **19.49 M/s**, 是 eventpp HighPerf 的 **2.9x**
+- eventpp HighPerfPolicy (SpinLock + CAS 池 + shared_mutex) 吞吐量 **6.95 M/s**, 比 Raw (5.11 M/s) 提升 **36%**, 但仍低于 MCCC BARE_METAL (31.09 M/s)
+- MCCC MPSC BARE_METAL 入队吞吐量 **31.09 M/s**, 是 eventpp HighPerf 的 **4.5x**, 是 eventpp Raw 的 **6.1x**
+- MCCC MPSC FULL_FEATURED 入队吞吐量 **20.61 M/s**, 是 eventpp HighPerf 的 **3.0x**
 
 **eventpp HighPerfPolicy 为什么更快?**
 - SpinLock 替代 std::mutex, 短临界区场景自旋效率更高
 - PoolAllocator lock-free CAS 消除逐节点 malloc
 - shared_mutex 读写分离, dispatch 不阻塞 enqueue
-- 入队延迟 P50=31 ns, 接近 MCCC BARE_METAL (31 ns)
+- 入队延迟 P50=30 ns, 接近 MCCC BARE_METAL (32 ns)
 
 **Publish-only vs E2E 差异?**
 - Publish-only 仅测入队速度, 与 eventpp/EnTT 的 enqueue 指标可比
@@ -216,7 +216,7 @@ xychart-beta
 - E2E 是更贴近真实系统的指标, 但入队吞吐量更能反映核心数据结构 (Ring Buffer) 的性能
 
 **MCCC 功能开销分析 (入队路径)**
-- BARE → FULL 开销 = 52 - 31 = **21 ns/消息** (优先级检查 + 索引缓存 + 背压判断 + 统计计数)
+- BARE → FULL 开销 = 48 - 32 = **16 ns/消息** (优先级检查 + 索引缓存 + 背压判断 + 统计计数)
 
 ### 3.4 不同消息大小对比 (FULL_FEATURED E2E 模式)
 
@@ -227,26 +227,75 @@ xychart-beta
 
 | 载荷 | MCCC FULL | eventpp Raw | sigslot | ZeroMQ |
 |:----:|:---------:|:-----------:|:-------:|:------:|
-| **24B** | 6.32 M/s (157 ns) | 4.85 M/s (52 ns) | 20.62 M/s (48 ns) | 4.65 M/s (210 ns) |
-| **64B** | 4.92 M/s (198 ns) | 4.87 M/s (64 ns) | 31.29 M/s (32 ns) | 1.03 M/s (965 ns) |
-| **128B** | 1.94 M/s (535 ns) | 4.39 M/s (74 ns) | 29.64 M/s (33 ns) | 2.03 M/s (489 ns) |
-| **256B** | 6.52 M/s (154 ns) | 2.85 M/s (100 ns) | 29.18 M/s (34 ns) | 1.94 M/s (516 ns) |
+| **24B** | 6.82 M/s (148 ns) | 5.11 M/s (49 ns) | 25.92 M/s (38 ns) | 4.48 M/s (221 ns) |
+| **64B** | 5.09 M/s (192 ns) | 4.61 M/s (68 ns) | 30.63 M/s (32 ns) | 2.88 M/s (345 ns) |
+| **128B** | 4.37 M/s (228 ns) | 4.50 M/s (70 ns) | 30.13 M/s (33 ns) | 1.98 M/s (502 ns) |
+| **256B** | 4.09 M/s (242 ns) | 3.53 M/s (92 ns) | 31.39 M/s (31 ns) | 2.14 M/s (466 ns) |
 
 #### SPSC 模式
 
 | 载荷 | MCCC FULL | eventpp Raw | sigslot | ZeroMQ |
 |:----:|:---------:|:-----------:|:-------:|:------:|
-| **24B** | 8.58 M/s (116 ns) | 4.78 M/s (51 ns) | 26.75 M/s (37 ns) | 4.03 M/s (214 ns) |
-| **64B** | 4.82 M/s (205 ns) | 4.67 M/s (65 ns) | 31.10 M/s (32 ns) | 2.82 M/s (353 ns) |
-| **128B** | 5.85 M/s (170 ns) | 4.43 M/s (73 ns) | 30.22 M/s (33 ns) | 2.00 M/s (505 ns) |
-| **256B** | 4.35 M/s (227 ns) | 2.98 M/s (97 ns) | 31.01 M/s (32 ns) | 2.04 M/s (489 ns) |
+| **24B** | 7.04 M/s (143 ns) | 5.18 M/s (49 ns) | 26.12 M/s (38 ns) | 4.63 M/s (221 ns) |
+| **64B** | 4.61 M/s (218 ns) | 4.82 M/s (63 ns) | 29.70 M/s (34 ns) | 2.81 M/s (352 ns) |
+| **128B** | 4.37 M/s (229 ns) | 4.61 M/s (69 ns) | 30.09 M/s (33 ns) | 2.11 M/s (465 ns) |
+| **256B** | 5.48 M/s (197 ns) | 3.15 M/s (95 ns) | 30.38 M/s (33 ns) | 2.00 M/s (494 ns) |
 
 **分析**:
-- **sigslot** 受载荷大小影响最小 (同步调用, 无拷贝入队), 各载荷吞吐量均 >20 M/s
-- **eventpp** 随载荷增大吞吐量下降明显 (4.85 → 2.85 M/s), 因为 std::list 节点需拷贝整个消息
-- **MCCC** 24B 场景 E2E 吞吐量 6.32 M/s, 是 eventpp 的 1.3x; 256B 场景是 eventpp 的 2.3x
-- **ZeroMQ** 受载荷影响最显著 (4.65 → 1.94 M/s), Socket 协议栈的消息拷贝成本随大小线性增长
+- **sigslot** 受载荷大小影响最小 (同步调用, 无拷贝入队), 各载荷吞吐量均 >25 M/s
+- **eventpp** 随载荷增大吞吐量下降明显 (5.11 → 3.53 M/s), 因为 std::list 节点需拷贝整个消息
+- **MCCC** 24B 场景 E2E 吞吐量 6.82 M/s, 优于 eventpp; 256B 场景 4.09 M/s, 是 eventpp 的 1.2x
+- **ZeroMQ** 受载荷影响最显著 (4.48 → 2.14 M/s), Socket 协议栈的消息拷贝成本随大小线性增长
 - **MCCC 在所有场景均提供优先级+背压+零堆分配等安全特性**, ZeroMQ 和 eventpp 不具备
+
+### 3.5 ProcessBatchWith 零开销分发路径
+
+v2.0.0 新增的 `ProcessBatchWith<Visitor>` 方法绕过回调表和 `shared_mutex`，使用 `std::visit` 编译期分发。
+
+#### E2E 吞吐量对比 (ProcessBatch vs ProcessBatchWith, 1M 消息)
+
+| 路径 | MPSC BARE | MPSC FULL | SPSC BARE | SPSC FULL |
+|------|:---------:|:---------:|:---------:|:---------:|
+| ProcessBatch (Callback) | 16.46 M/s | 6.82 M/s | 18.85 M/s | 7.04 M/s |
+| ProcessBatchWith (Visitor) | 15.28 M/s | 10.20 M/s | 17.40 M/s | 10.59 M/s |
+
+> **注**: ProcessBatchWith 在 FULL_FEATURED 模式下 E2E 吞吐量提升约 **+50%** (MPSC: 6.82 → 10.20 M/s, SPSC: 7.04 → 10.59 M/s), 因为绕过了 `shared_mutex` 读锁和回调表间接调用, 使用 `std::visit` 编译期分发。BARE_METAL 模式下略有回退 (MPSC: -7%, SPSC: -8%), 因为 BARE_METAL 本身无 shared_mutex 开销, ProcessBatchWith 的 visitor 分支匹配在此场景无优势。
+
+### 3.6 Pub-only 吞吐量深度分析 (队列溢出效应)
+
+主 benchmark 的 Publish-only 测试使用 1M 消息无消费者模式, 队列深度 128K。当队列满后, 后续 Publish 调用会快速失败返回 (fast-path failure), 导致**表观吞吐量偏高**。本节通过三组对照实验揭示真实的纯发布吞吐量。
+
+#### MPSC 模式
+
+| 变体 | BARE_METAL (M/s) | FULL_FEATURED (M/s) | 说明 |
+|------|:-----------------:|:-------------------:|------|
+| **Control** (1M, 无消费者) | 29.91 ± 0.83 | 19.23 ± 0.31 | 含 ~872K fast-path failure, 表观吞吐量偏高 |
+| **Variant A** (100K, 无消费者) | 22.95 ± 0.90 | 17.51 ± 0.66 | 100K < 128K 队列深度, 100% 入队成功, 真实纯发布吞吐 |
+| **Variant B** (1M, 有消费者) | 15.95 ± 0.29 | 7.19 ± 0.12 | 消费者持续排空, 含跨核 cache coherence 成本 |
+
+#### SPSC 模式
+
+| 变体 | BARE_METAL (M/s) | FULL_FEATURED (M/s) | 说明 |
+|------|:-----------------:|:-------------------:|------|
+| **Control** (1M, 无消费者) | 32.49 ± 1.08 | 20.49 ± 0.50 | 含 ~872K fast-path failure, 表观吞吐量偏高 |
+| **Variant A** (100K, 无消费者) | 27.21 ± 0.95 | 19.12 ± 1.10 | 100K < 128K 队列深度, 100% 入队成功, 真实纯发布吞吐 |
+| **Variant B** (1M, 有消费者) | 19.26 ± 0.39 | 7.54 ± 0.15 | 消费者持续排空, 含跨核 cache coherence 成本 |
+
+```mermaid
+xychart-beta
+    title "Pub-only 吞吐量对照 (BARE_METAL, M msg/s)"
+    x-axis ["SPSC Ctrl", "MPSC Ctrl", "SPSC VarA", "MPSC VarA", "SPSC VarB", "MPSC VarB"]
+    y-axis "M msg/s" 0 --> 35
+    bar [32.49, 29.91, 27.21, 22.95, 19.26, 15.95]
+```
+
+**分析**:
+
+1. **Control vs Variant A (队列溢出效应)**: Control 发送 1M 消息到 128K 深度队列, 约 872K 条消息触发 fast-path failure (队列满时直接返回 false, 耗时极短)。这使 Control 的表观吞吐量膨胀 ~30%。Variant A 发送 100K 条 (< 128K 队列深度), 全部成功入队, 反映**真实纯发布吞吐量**: BARE_METAL MPSC 22.95 M/s, SPSC 27.21 M/s。
+
+2. **Variant A vs Variant B (跨核 cache coherence 成本)**: Variant B 有消费者线程持续排空队列, 生产者每次 Publish 的 CAS/store 需要与消费者的 load 竞争 cache line, 导致吞吐量进一步下降。BARE_METAL: MPSC 22.95 → 15.95 M/s (-30%), SPSC 27.21 → 19.26 M/s (-29%)。这与 E2E benchmark 的结果一致 (MPSC 16.46 M/s, SPSC 18.85 M/s)。
+
+3. **FULL_FEATURED 开销放大**: FULL 模式下 Control → Variant A 降幅较小 (MPSC: 19.23 → 17.51, -9%), 说明 FULL 的准入检查本身已消耗大部分时间; 但 Variant A → Variant B 降幅显著 (MPSC: 17.51 → 7.19, -59%), 说明跨核 cache coherence + shared_mutex 读锁在 FULL 模式下成为主要瓶颈。
 
 ---
 
@@ -261,6 +310,7 @@ xychart-beta
 | 优先级控制 | ✅ | ❌ | ❌ | ❌ | ❌ | ✅ |
 | 背压监控 | ✅ | ❌ | ❌ | ❌ | ✅ (HWM) | ❌ |
 | Lock-free | ✅ | 部分 (Pool CAS) | ❌ | ❌ | 部分 | ❌ |
+| 零开销分发 (编译期) | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | 零堆分配 (热路径) | ✅ | ❌ | ❌ | ✅ | ❌ | ✅ |
 | 线程安全 | ✅ | ✅ | ❌ | ✅ | ✅ | ✅ |
 | Header-only | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
@@ -276,7 +326,7 @@ xychart-beta
 
 | 项目 | 核心文件数 | 核心代码行数 | 形态 |
 |------|:--------:|:----------:|------|
-| **MCCC** | 2 | **1,179** | Header-only (`mccc.hpp` + `component.hpp`) |
+| **MCCC** | 3 | **1,535** | Header-only (`mccc.hpp` + `component.hpp` + `static_component.hpp`) |
 | **EnTT signal** | 5 | 1,433 | Header-only |
 | **eventpp** | 3 | 1,487 | Header-only |
 | **sigslot** | 1 | 1,848 | Header-only |
@@ -287,7 +337,7 @@ xychart-beta
 
 | 项目 | 二进制大小 | 相对 MCCC |
 |------|:---------:|:---------:|
-| **MCCC** | **14.2 KB** | 1.0x |
+| **MCCC** | **14.6 KB** | 1.0x |
 | **EnTT** | 18.3 KB | 1.3x |
 | **eventpp** | 26.3 KB | 1.9x |
 | **sigslot** | 34.3 KB | 2.4x |
@@ -337,12 +387,12 @@ xychart-beta
 
 | 指标 | MCCC | eventpp | EnTT | sigslot | ZeroMQ |
 |------|:----:|:-------:|:----:|:-------:|:------:|
-| 吞吐量方差 (StdDev/Mean) | **2.0%** (BARE pub) / **3.0%** (FULL pub) | 5.6% (Raw) / 8.1% (HighPerf) | **25.6%** | 2.3% | 4.3% |
+| 吞吐量方差 (StdDev/Mean) | **2.5%** (BARE pub) / **3.7%** (FULL pub) | 6.1% (Raw) / 7.1% (HighPerf) | **25.7%** | 2.2% | 6.3% |
 | 尾部延迟 (P99/P50) | **1.03x** | 1.04x (Raw) / 1.10x (HighPerf) | 1.20x | 1.04x | 1.06x |
 | 长时间运行稳定性 | ✅ 固定内存, 无碎片 | ⚠️ 内存碎片风险 (Pool 模式可缓解) | ⚠️ vector 重分配 | ✅ 无队列 | ⚠️ 内存碎片 |
 | 多生产者竞争 | ✅ CAS 无饥饿 | ✅ SpinLock/Mutex 公平 | ❌ 不支持 | ✅ Mutex | ✅ |
 
-> 方差数据来自本次 10 轮测试。MCCC MPSC BARE_METAL Publish-only 的 StdDev/Mean = 0.66/32.44 = 2.0%, FULL_FEATURED = 0.59/19.49 = 3.0%, 是异步方案中最稳定的。
+> 方差数据来自本次 10 轮测试。MCCC MPSC BARE_METAL Publish-only 的 StdDev/Mean = 0.78/31.09 = 2.5%, FULL_FEATURED = 0.77/20.61 = 3.7%, 是异步方案中最稳定的。
 
 ### 4.6 适用场景对比
 
@@ -418,7 +468,7 @@ flowchart TB
 | Lock-free CAS 无锁入队, 线程安全 | 单消费者 (MPSC), 不支持多消费者并行 |
 | 优先级准入 + 背压控制, HIGH 零丢失 | 吞吐量不如单线程同步方案 (EnTT/sigslot) |
 | 零堆分配, 确定性内存, MISRA 合规 | 不支持 IPC/网络传输 |
-| Header-only, 零外部依赖, 14.2 KB 二进制 | 固定 Ring Buffer 大小, 需编译期预估容量 |
+| Header-only, 零外部依赖, 14.6 KB 二进制 | 固定 Ring Buffer 大小, 需编译期预估容量 |
 | 编译期可裁剪, 适配嵌入式 MCU | 生态较新, 社区规模小 |
 
 ### 6.2 eventpp (fork 优化版)
@@ -453,8 +503,8 @@ flowchart TB
 
 | 优点 | 缺点 |
 |------|------|
-| 极致单线程性能 (~107 M/s) | **不支持线程安全**, 多线程需外部加锁 |
-| ECS 生态完整, 游戏引擎广泛使用 | 吞吐量方差大 (StdDev/Mean = 25.4%) |
+| 极致单线程性能 (~115 M/s) | **不支持线程安全**, 多线程需外部加锁 |
+| ECS 生态完整, 游戏引擎广泛使用 | 吞吐量方差大 (StdDev/Mean = 25.7%) |
 | Header-only, 零外部依赖 | 无优先级, 无背压, 无安全保护 |
 | 编译期类型安全 | 最新版 (v3.16+) 需 C++20, 旧版 (v3.12) 才支持 C++17 |
 | 社区活跃 (~10K Stars) | 不适合嵌入式 (动态内存, 需 RTTI) |
@@ -474,7 +524,7 @@ flowchart TB
 | 优点 | 缺点 |
 |------|------|
 | 支持 IPC/TCP/inproc 多种传输 | 编译型库, 静态库 2.15 MB, 重量级 |
-| HWM 背压控制, 成熟稳定 | 入队延迟高 (~211 ns), 协议栈开销 |
+| HWM 背压控制, 成熟稳定 | 入队延迟高 (~221 ns), 协议栈开销 |
 | 生态庞大 (~10K Stars), 多语言绑定 | 不适合嵌入式 MCU (资源消耗大) |
 | 模式丰富: PUB/SUB, PUSH/PULL, REQ/REP | 无类型安全, 裸字节传输 |
 | 跨平台, 工业级可靠性 | 外部依赖多, 构建复杂 |
@@ -495,19 +545,19 @@ MCCC 在纯吞吐量上不如单线程同步方案 (EnTT/sigslot), 但作为**�
 
 | 对比维度 | MCCC vs eventpp Raw | MCCC vs eventpp HighPerf | MCCC vs ZeroMQ | MCCC vs EnTT |
 |----------|:--------------:|:--------------:|:--------------:|:------------:|
-| 入队吞吐量 | MCCC BARE 快 **6.7x** | MCCC BARE 快 **4.9x** | MCCC BARE 快 **7.0x** | EnTT 快 **3.5x** (单线程) |
-| E2E 吞吐量 | MCCC BARE 快 **3.4x** | MCCC BARE 快 **2.6x** | MCCC BARE 快 **3.6x** | N/A (EnTT 无异步) |
+| 入队吞吐量 | MCCC BARE 快 **6.1x** | MCCC BARE 快 **4.5x** | MCCC BARE 快 **6.9x** | EnTT 快 **3.7x** (单线程) |
+| E2E 吞吐量 | MCCC BARE 快 **3.2x** | MCCC BARE 快 **2.4x** | MCCC BARE 快 **3.7x** | N/A (EnTT 无异步) |
 | 线程安全 | 均支持 | 均支持 | 均支持 | EnTT **不支持** |
 | 优先级控制 | MCCC **独有** | MCCC **独有** | 均无 | EnTT **无** |
 | 背压监控 | MCCC **独有** | MCCC **独有** | ZeroMQ 有 HWM | EnTT **无** |
 | 零堆分配 | MCCC **是** | MCCC **是** | ZeroMQ **否** | EnTT **否** |
-| 二进制大小 | MCCC 小 **1.9x** | MCCC 小 **1.9x** | MCCC 小 **155x** | MCCC 小 **1.3x** |
+| 二进制大小 | MCCC 小 **1.8x** | MCCC 小 **1.8x** | MCCC 小 **155x** | MCCC 小 **1.3x** |
 | 外部依赖 | 均无 | 均无 | ZeroMQ **需要** | 均无 |
 | 嵌入式适配 | MCCC **可配置** | MCCC **可配置** | ZeroMQ **不适合** | EnTT **不适合** |
 
-**定位**: MCCC 不是要跟单线程同步方案比吞吐, 而是在提供**安全关键特性** (优先级准入 + 背压控制 + 零堆分配 + MISRA 合规) 的前提下, 保持**工业级可用的性能**。MCCC MPSC FULL_FEATURED 入队吞吐量 19.49 M/s, 是 eventpp HighPerf 的 2.9x, 是 eventpp Raw 的 4.0x, 是 ZeroMQ 的 4.2x; BARE_METAL 入队吞吐量 32.44 M/s, 是 eventpp HighPerf 的 4.9x。同时保持最小的资源占用 (14.2 KB 二进制, ~4 KB 最小 RAM)。
+**定位**: MCCC 不是要跟单线程同步方案比吞吐, 而是在提供**安全关键特性** (优先级准入 + 背压控制 + 零堆分配 + MISRA 合规) 的前提下, 保持**工业级可用的性能**。MCCC MPSC FULL_FEATURED 入队吞吐量 20.61 M/s, 是 eventpp HighPerf 的 3.0x, 是 eventpp Raw 的 4.0x, 是 ZeroMQ 的 4.6x; BARE_METAL 入队吞吐量 31.09 M/s, 是 eventpp HighPerf 的 4.5x。v2.0.0 新增 ProcessBatchWith 零开销分发, 在 FULL_FEATURED 模式下 E2E 吞吐量提升 +50% (6.82 → 10.20 M/s)。同时保持最小的资源占用 (14.6 KB 二进制, ~4 KB 最小 RAM)。
 
-> **注**: eventpp HighPerfPolicy (SpinLock + CAS 池 + shared_mutex) 入队延迟 P50=31 ns, 接近 MCCC BARE_METAL (31 ns), 但总吞吐量 (enqueue+process) 仍低于 MCCC, 主要受限于 std::list 链表遍历 + process 阶段的锁开销。
+> **注**: eventpp HighPerfPolicy (SpinLock + CAS 池 + shared_mutex) 入队延迟 P50=30 ns, 接近 MCCC BARE_METAL (32 ns), 但总吞吐量 (enqueue+process) 仍低于 MCCC, 主要受限于 std::list 链表遍历 + process 阶段的锁开销。
 
 ---
 
@@ -517,7 +567,7 @@ MCCC 在纯吞吐量上不如单线程同步方案 (EnTT/sigslot), 但作为**�
 
 | 编号 | 优化项 | 实测效果 |
 |------|--------|----------|
-| 1.1 | SPSC wait-free 快速路径 (`MCCC_SINGLE_PRODUCER=1`) | BARE_METAL 入队 33.32 M/s (vs MPSC 32.44 M/s), E2E 17.78 M/s (vs MPSC 16.55 M/s, +7%) |
+| 1.1 | SPSC wait-free 快速路径 (`MCCC_SINGLE_PRODUCER=1`) | BARE_METAL 入队 33.42 M/s (vs MPSC 31.09 M/s), E2E 18.85 M/s (vs MPSC 16.46 M/s, +15%) |
 | 1.2 | 索引缓存 (`cached_consumer_pos_`) | 减少跨核 acquire load, 准入检查 ~3 ns |
 | 1.3 | Signal fence (`MCCC_SINGLE_CORE=1`) | E2E P50 310 ns (vs 585 ns, -47%) |
 | 1.4 | shared_mutex 读写分离 | BARE_METAL 无锁分发, FULL 读锁开销 ~3 ns |
@@ -527,11 +577,11 @@ MCCC 在纯吞吐量上不如单线程同步方案 (EnTT/sigslot), 但作为**�
 
 | 指标 | 优化前 | 优化后 | 提升 |
 |------|--------|--------|------|
-| BARE_METAL (入队) | 9.63 M/s | 32.44 M/s | **3.4x** |
-| FULL_FEATURED (入队) | 4.93 M/s | 19.49 M/s | **4.0x** |
-| vs eventpp Raw (入队) | 0.9x (更慢) | **4.0x** (更快) | 逆转 |
-| vs eventpp HighPerf (入队) | N/A | **2.9x** (更快) | HighPerf 新增对标 |
-| vs ZeroMQ (入队) | 2.2x | **7.0x** | 领先扩大 |
+| BARE_METAL (入队) | 9.63 M/s | 31.09 M/s | **3.2x** |
+| FULL_FEATURED (入队) | 4.93 M/s | 20.61 M/s | **4.2x** |
+| vs eventpp Raw (入队) | 0.9x (更慢) | **6.1x** (更快) | 逆转 |
+| vs eventpp HighPerf (入队) | N/A | **3.0x** (更快) | HighPerf 新增对标 |
+| vs ZeroMQ (入队) | 2.2x | **6.9x** | 领先扩大 |
 
 ### Phase 2: 工业级加固
 

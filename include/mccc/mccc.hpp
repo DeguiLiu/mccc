@@ -51,6 +51,7 @@
 #ifndef MCCC_HPP_
 #define MCCC_HPP_
 
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 
@@ -399,6 +400,128 @@ overloaded<Ts...> make_overloaded(Ts... ts) {
 }
 
 // ============================================================================
+// FixedFunction: SBO-based type-erased callable (no heap allocation)
+// ============================================================================
+
+/**
+ * @brief Fixed-capacity type-erased callable with small buffer optimization.
+ *
+ * Replaces std::function for hot-path callbacks where heap allocation is
+ * unacceptable. All storage is inline (stack or static). Compile-time
+ * static_assert rejects callables that exceed Capacity.
+ *
+ * @tparam Signature Function signature, e.g. void(int)
+ * @tparam Capacity  Inline storage size in bytes (default 48)
+ */
+template <typename Signature, uint32_t Capacity = 48U>
+class FixedFunction;
+
+template <typename R, typename... Args, uint32_t Capacity>
+class FixedFunction<R(Args...), Capacity> {
+ public:
+  // ---- Constructors / assignment ----
+
+  FixedFunction() noexcept : ops_(nullptr) {}
+
+  // NOLINTNEXTLINE(runtime/explicit)
+  FixedFunction(std::nullptr_t) noexcept : ops_(nullptr) {}
+
+  template <typename F, typename DecayF = typename std::decay<F>::type,
+            typename = typename std::enable_if<!std::is_same<DecayF, FixedFunction>::value>::type>
+  // NOLINTNEXTLINE(runtime/explicit)
+  FixedFunction(F&& f) noexcept : ops_(&OpsFor<DecayF>::kInstance) {
+    static_assert(sizeof(DecayF) <= Capacity, "Callable exceeds FixedFunction inline capacity");
+    static_assert(std::is_nothrow_move_constructible<DecayF>::value, "Callable must be nothrow move constructible");
+    new (static_cast<void*>(&storage_)) DecayF(std::forward<F>(f));
+  }
+
+  FixedFunction(FixedFunction&& other) noexcept : ops_(other.ops_) {
+    if (ops_ != nullptr) {
+      ops_->move(&other.storage_, &storage_);
+      other.ops_ = nullptr;
+    }
+  }
+
+  FixedFunction& operator=(FixedFunction&& other) noexcept {
+    if (this != &other) {
+      Destroy();
+      ops_ = other.ops_;
+      if (ops_ != nullptr) {
+        ops_->move(&other.storage_, &storage_);
+        other.ops_ = nullptr;
+      }
+    }
+    return *this;
+  }
+
+  FixedFunction& operator=(std::nullptr_t) noexcept {
+    Destroy();
+    ops_ = nullptr;
+    return *this;
+  }
+
+  ~FixedFunction() noexcept { Destroy(); }
+
+  // Deleted copy operations
+  FixedFunction(const FixedFunction&) = delete;
+  FixedFunction& operator=(const FixedFunction&) = delete;
+
+  // ---- Observers ----
+
+  explicit operator bool() const noexcept { return ops_ != nullptr; }
+
+  // ---- Invocation ----
+
+  R operator()(Args... args) const noexcept {
+    if (ops_ != nullptr) {
+      return ops_->invoke(&storage_, std::forward<Args>(args)...);
+    }
+    return ReturnDefault();
+  }
+
+ private:
+  // ---- Ops vtable for type erasure ----
+
+  struct Ops {
+    void (*destroy)(void* storage) noexcept;
+    void (*move)(void* src, void* dst) noexcept;
+    R (*invoke)(const void* storage, Args... args) noexcept;
+  };
+
+  template <typename F>
+  struct OpsFor {
+    static void DoDestroy(void* storage) noexcept { static_cast<F*>(storage)->~F(); }
+    static void DoMove(void* src, void* dst) noexcept {
+      new (dst) F(std::move(*static_cast<F*>(src)));
+      static_cast<F*>(src)->~F();
+    }
+    static R DoInvoke(const void* storage, Args... args) noexcept {
+      return (*const_cast<F*>(static_cast<const F*>(storage)))(std::forward<Args>(args)...);
+    }
+    static constexpr Ops kInstance{&DoDestroy, &DoMove, &DoInvoke};
+  };
+
+  void Destroy() noexcept {
+    if (ops_ != nullptr) {
+      ops_->destroy(&storage_);
+    }
+  }
+
+  template <typename Ret = R>
+  static typename std::enable_if<std::is_void<Ret>::value, Ret>::type ReturnDefault() noexcept {
+    return;
+  }
+
+  template <typename Ret = R>
+  static typename std::enable_if<!std::is_void<Ret>::value, Ret>::type ReturnDefault() noexcept {
+    return Ret{};
+  }
+
+  const Ops* ops_;
+  alignas(std::max_align_t) uint8_t storage_[Capacity];
+};
+
+// ============================================================================
 // Message Priority & Header
 // ============================================================================
 
@@ -663,7 +786,7 @@ class AsyncBus {
   static constexpr uint32_t BACKPRESSURE_WARNING_THRESHOLD = (MAX_QUEUE_DEPTH * 75U) / 100U;
   static constexpr uint32_t BACKPRESSURE_CRITICAL_THRESHOLD = (MAX_QUEUE_DEPTH * 90U) / 100U;
 
-  using CallbackType = std::function<void(const EnvelopeType&)>;
+  using CallbackType = FixedFunction<void(const EnvelopeType&), 64U>;
 
   static AsyncBus& Instance() noexcept {
     static AsyncBus instance;
@@ -774,6 +897,40 @@ class AsyncBus {
       if (!no_stats) {
         stats_.messages_processed.fetch_add(processed, std::memory_order_relaxed);
       }
+    }
+    return processed;
+  }
+
+  /**
+   * @brief Zero-overhead compile-time dispatch using a visitor.
+   *
+   * Bypasses callback_table_ and shared_mutex entirely.
+   * The visitor must handle all types in PayloadVariant.
+   * Single consumer only (same constraint as ProcessBatch).
+   *
+   * @tparam Visitor A callable that accepts all types in PayloadVariant
+   * @return Number of messages processed
+   */
+  template <typename Visitor>
+  uint32_t ProcessBatchWith(Visitor&& vis) noexcept {
+    uint32_t processed = 0U;
+    uint32_t cons_pos = consumer_pos_.load(std::memory_order_relaxed);
+    for (uint32_t i = 0U; i < BATCH_PROCESS_SIZE; ++i) {
+      RingBufferNode& node = ring_buffer_[cons_pos & BUFFER_MASK];
+      uint32_t expected_seq = cons_pos + 1U;
+      uint32_t seq = node.sequence.load(MCCC_MO_ACQUIRE);
+      detail::AcquireFence();
+      if (seq != expected_seq) {
+        break;
+      }
+      std::visit(vis, node.envelope.payload);
+      detail::ReleaseFence();
+      node.sequence.store(cons_pos + BUFFER_SIZE, MCCC_MO_RELEASE);
+      ++cons_pos;
+      ++processed;
+    }
+    if (processed > 0U) {
+      consumer_pos_.store(cons_pos, std::memory_order_relaxed);
     }
     return processed;
   }

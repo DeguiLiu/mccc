@@ -13,7 +13,7 @@
     MCCC_SINGLE_CORE     = 0
     MCCC_QUEUE_DEPTH     = 131072
   Versions:
-    MCCC:    v1.0.0 (mccc-bus)
+    MCCC:    v2.0.0 (mccc-bus)
     eventpp: v0.3.0 (fork: gitee.com/liudegui/eventpp)
     EnTT:    v3.12.2
     sigslot: v1.2.3
@@ -23,52 +23,68 @@
 [Warmup] Running warmup rounds...
 
 ========== MCCC BARE_METAL (lock-free MPSC + message bus) ==========
-  E2E (pub+consume):           Throughput:    16.55 ± 0.39 M/s   Latency: P50=    60 P95=    61 P99=    61 ns
-  Publish-only:                Throughput:    32.44 ± 0.66 M/s   Latency: P50=    31 P95=    32 P99=    32 ns
+  E2E (pub+consume):           Throughput:    16.46 ± 1.28 M/s   Latency: P50=    59 P95=    61 P99=    61 ns
+  Publish-only:                Throughput:    31.09 ± 0.78 M/s   Latency: P50=    32 P95=    33 P99=    33 ns
 
 ========== MCCC FULL_FEATURED (lock-free MPSC + priority + backpressure + stats) ==========
-  E2E (pub+consume):           Throughput:     6.32 ± 0.12 M/s   Latency: P50=   157 P95=   162 P99=   162 ns
-  Publish-only:                Throughput:    19.49 ± 0.59 M/s   Latency: P50=    52 P95=    52 P99=    52 ns
+  E2E (pub+consume):           Throughput:     6.82 ± 0.20 M/s   Latency: P50=   148 P95=   149 P99=   149 ns
+  Publish-only:                Throughput:    20.61 ± 0.77 M/s   Latency: P50=    48 P95=    51 P99=    51 ns
+
+========== MCCC ProcessBatchWith (zero-overhead visitor dispatch) ==========
+  BARE_METAL E2E (Visitor):    Throughput:    15.28 ± 0.11 M/s   Latency: P50=    65 P95=    66 P99=    66 ns
+  FULL_FEATURED E2E (Visitor): Throughput:    10.20 ± 0.27 M/s   Latency: P50=    97 P95=   101 P99=   101 ns
+
+========== MCCC Pub-only Throughput Comparison (queue overflow analysis) ==========
+
+  [BARE_METAL]
+  Control: 1M no consumer      Throughput:    29.91 ± 0.83 M/s
+  Variant A: 100K no consumer  Throughput:    22.95 ± 0.90 M/s
+  Variant B: 1M + consumer drain Throughput:    15.95 ± 0.29 M/s
+
+  [FULL_FEATURED]
+  Control: 1M no consumer      Throughput:    19.23 ± 0.31 M/s
+  Variant A: 100K no consumer  Throughput:    17.51 ± 0.66 M/s
+  Variant B: 1M + consumer drain Throughput:     7.19 ± 0.12 M/s
 
 ========== eventpp EventQueue Raw (mutex + std::list) ==========
-  Enqueue+Process:             Throughput:     4.85 ± 0.27 M/s   Latency: P50=    52 P95=    54 P99=    54 ns
+  Enqueue+Process:             Throughput:     5.11 ± 0.31 M/s   Latency: P50=    49 P95=    50 P99=    50 ns
 
 ========== eventpp EventQueue Pool (mutex + CAS pool allocator) ==========
-  Enqueue+Process:             Throughput:     4.79 ± 0.11 M/s   Latency: P50=    55 P95=    56 P99=    56 ns
+  Enqueue+Process:             Throughput:     4.90 ± 0.11 M/s   Latency: P50=    54 P95=    55 P99=    55 ns
 
 ========== eventpp EventQueue HighPerf (SpinLock + CAS pool + shared_mutex) ==========
-  Enqueue+Process:             Throughput:     6.63 ± 0.54 M/s   Latency: P50=    31 P95=    34 P99=    34 ns
+  Enqueue+Process:             Throughput:     6.95 ± 0.49 M/s   Latency: P50=    30 P95=    31 P99=    31 ns
 
 ========== EnTT dispatcher (single-thread, enqueue + update) ==========
-  Enqueue+Update:              Throughput:   113.43 ± 29.11 M/s   Latency: P50=     5 P95=     6 P99=     6 ns
+  Enqueue+Update:              Throughput:   115.07 ± 29.55 M/s   Latency: P50=     4 P95=     5 P99=     5 ns
 
 ========== sigslot (synchronous signal/slot, direct call) ==========
-  Sync emit:                   Throughput:    20.62 ± 0.48 M/s   Latency: P50=    48 P95=    50 P99=    50 ns
+  Sync emit:                   Throughput:    25.92 ± 0.56 M/s   Latency: P50=    38 P95=    40 P99=    40 ns
 
 ========== ZeroMQ inproc:// (pub/sub, socket-based IPC) ==========
-  Push/Pull inproc:            Throughput:     4.65 ± 0.20 M/s   Latency: P50=   210 P95=   223 P99=   223 ns
+  Push/Pull inproc:            Throughput:     4.48 ± 0.28 M/s   Latency: P50=   221 P95=   228 P99=   228 ns
 
 ==========================================
   Multi-size Payload Benchmark
 ==========================================
 
 --- 64 bytes ---
-  MCCC FULL 64B:               Throughput:     4.92 ± 0.22 M/s   Latency: P50=   198 P95=   217 P99=   217 ns
-  eventpp Raw 64B:             Throughput:     4.87 ± 0.38 M/s   Latency: P50=    64 P95=    68 P99=    68 ns
-  sigslot 64B:                 Throughput:    31.29 ± 0.50 M/s   Latency: P50=    32 P95=    33 P99=    33 ns
-  ZeroMQ 64B:                  Throughput:     1.03 ± 0.03 M/s   Latency: P50=   965 P95=  1006 P99=  1006 ns
+  MCCC FULL 64B:               Throughput:     5.09 ± 0.15 M/s   Latency: P50=   192 P95=   205 P99=   205 ns
+  eventpp Raw 64B:             Throughput:     4.61 ± 0.49 M/s   Latency: P50=    68 P95=    70 P99=    70 ns
+  sigslot 64B:                 Throughput:    30.63 ± 0.65 M/s   Latency: P50=    32 P95=    33 P99=    33 ns
+  ZeroMQ 64B:                  Throughput:     2.88 ± 0.10 M/s   Latency: P50=   345 P95=   365 P99=   365 ns
 
 --- 128 bytes ---
-  MCCC FULL 128B:              Throughput:     1.94 ± 0.18 M/s   Latency: P50=   535 P95=   575 P99=   575 ns
-  eventpp Raw 128B:            Throughput:     4.39 ± 0.41 M/s   Latency: P50=    74 P95=    76 P99=    76 ns
-  sigslot 128B:                Throughput:    29.64 ± 0.96 M/s   Latency: P50=    33 P95=    35 P99=    35 ns
-  ZeroMQ 128B:                 Throughput:     2.03 ± 0.04 M/s   Latency: P50=   489 P95=   509 P99=   509 ns
+  MCCC FULL 128B:              Throughput:     4.37 ± 0.12 M/s   Latency: P50=   228 P95=   237 P99=   237 ns
+  eventpp Raw 128B:            Throughput:     4.50 ± 0.43 M/s   Latency: P50=    70 P95=    74 P99=    74 ns
+  sigslot 128B:                Throughput:    30.13 ± 1.11 M/s   Latency: P50=    33 P95=    34 P99=    34 ns
+  ZeroMQ 128B:                 Throughput:     1.98 ± 0.03 M/s   Latency: P50=   502 P95=   517 P99=   517 ns
 
 --- 256 bytes ---
-  MCCC FULL 256B:              Throughput:     6.52 ± 0.11 M/s   Latency: P50=   154 P95=   155 P99=   155 ns
-  eventpp Raw 256B:            Throughput:     2.85 ± 0.27 M/s   Latency: P50=   100 P95=   100 P99=   100 ns
-  sigslot 256B:                Throughput:    29.18 ± 0.71 M/s   Latency: P50=    34 P95=    35 P99=    35 ns
-  ZeroMQ 256B:                 Throughput:     1.94 ± 0.05 M/s   Latency: P50=   516 P95=   530 P99=   530 ns
+  MCCC FULL 256B:              Throughput:     4.09 ± 0.09 M/s   Latency: P50=   242 P95=   251 P99=   251 ns
+  eventpp Raw 256B:            Throughput:     3.53 ± 0.41 M/s   Latency: P50=    92 P95=    96 P99=    96 ns
+  sigslot 256B:                Throughput:    31.39 ± 0.76 M/s   Latency: P50=    31 P95=    32 P99=    32 ns
+  ZeroMQ 256B:                 Throughput:     2.14 ± 0.03 M/s   Latency: P50=   466 P95=   475 P99=   475 ns
 
 ========================================
   Benchmark Complete!

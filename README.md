@@ -12,7 +12,7 @@ Lock-free MPSC message bus designed for safety-critical embedded systems.
 
 ## Features
 
-- **Header-only**: 2 header files (`mccc.hpp` + `component.hpp`), zero external dependencies, pure C++17
+- **Header-only**: 3 header files (`mccc.hpp` + `component.hpp` + `static_component.hpp`), zero external dependencies, pure C++17
 - **Lock-free MPSC**: CAS atomic operations, no lock contention
 - **Priority admission control**: Zero message loss for HIGH priority under system overload
 - **Backpressure monitoring**: Four-level queue health status (NORMAL/WARNING/CRITICAL/FULL)
@@ -20,6 +20,7 @@ Lock-free MPSC message bus designed for safety-critical embedded systems.
 - **Type-safe**: Compile-time checking via std::variant
 - **MISRA C++ compliant**: Suitable for automotive, aerospace, and medical applications (C++17 subset)
 - **Deep embedded optimization**: SPSC wait-free, index caching, signal fence, BARE_METAL lock-free dispatch
+- **Zero-overhead dispatch**: ProcessBatchWith + CRTP StaticComponent, compile-time message routing
 
 ## Performance
 
@@ -126,6 +127,10 @@ bool Unsubscribe(const SubscriptionHandle& handle);
 // Consume
 uint32_t ProcessBatch();
 
+// Zero-overhead dispatch (compile-time, no lock, no callback table)
+template<typename Visitor>
+uint32_t ProcessBatchWith(Visitor&& vis);
+
 // Monitoring
 BackpressureLevel GetBackpressureLevel() const;
 BusStatisticsSnapshot GetStatistics() const;
@@ -162,7 +167,7 @@ cmake .. -DCMAKE_CXX_FLAGS="-DMCCC_QUEUE_DEPTH=4096 -DMCCC_SINGLE_PRODUCER=1 -DM
 
 ## Testing
 
-70 test cases, 203 assertions, covering:
+171 test cases, covering:
 
 | Test File | Coverage |
 |-----------|----------|
@@ -175,6 +180,9 @@ cmake .. -DCMAKE_CXX_FLAGS="-DMCCC_QUEUE_DEPTH=4096 -DMCCC_SINGLE_PRODUCER=1 -DM
 | test_stability | Throughput stability (10-round statistics), sustained throughput, enqueue latency percentiles |
 | test_edge_cases | Queue-full recovery, error callbacks, NO_STATS mode, performance mode switching |
 | test_copy_move | CopyMoveCounter zero-copy verification, FixedVector move semantics |
+| test_fixed_function | FixedFunction SBO type erasure, move semantics, empty invoke |
+| test_visitor_dispatch | ProcessBatchWith dispatch, throughput comparison |
+| test_static_component | CRTP StaticComponent, HasHandler trait detection |
 
 ```bash
 mkdir -p build && cd build
@@ -188,15 +196,16 @@ cmake .. -DCMAKE_BUILD_TYPE=Release && make -j$(nproc)
 ```
 mccc/
 ├── include/mccc/
-│   ├── mccc.hpp           # Core: FixedString, FixedVector, MessageEnvelope, AsyncBus, Priority
-│   └── component.hpp      # Component<PayloadVariant> - Safe component base class (optional)
+│   ├── mccc.hpp              # Core: FixedString, FixedVector, FixedFunction, AsyncBus, Priority
+│   ├── component.hpp         # Component<PayloadVariant> - Runtime dynamic subscription (optional)
+│   └── static_component.hpp  # StaticComponent<Derived, PayloadVariant> - CRTP zero-overhead (optional)
 ├── examples/
 │   ├── example_types.hpp   # Example message type definitions
 │   ├── simple_demo.cpp     # Minimal usage example
 │   ├── priority_demo.cpp   # Priority admission demo
 │   ├── hsm_demo.cpp        # HSM state machine integration
 │   └── benchmark.cpp       # Performance benchmark
-├── tests/                  # Unit tests (Catch2, 70 cases)
+├── tests/                  # Unit tests (Catch2, 171 cases)
 ├── extras/                 # HSM, DMA BufferPool, DataToken, logging macros
 ├── docs/                   # Design docs, performance reports, competitive analysis, API reference
 └── CMakeLists.txt
