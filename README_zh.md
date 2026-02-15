@@ -2,6 +2,10 @@
 
 # MCCC - Message-Centric Component Communication
 
+[![CI](https://github.com/DeguiLiu/mccc/actions/workflows/ci.yml/badge.svg)](https://github.com/DeguiLiu/mccc/actions/workflows/ci.yml)
+[![Code Coverage](https://github.com/DeguiLiu/mccc/actions/workflows/coverage.yml/badge.svg)](https://github.com/DeguiLiu/mccc/actions/workflows/coverage.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 Lock-free MPSC 消息总线，专为安全关键嵌入式系统设计。
 
 > **架构**: MPSC (Multi-Producer, Single-Consumer)。多个生产者线程可安全并发发布消息，单个消费者线程调用 `ProcessBatch()` 处理。如需多消费者，推荐使用多个独立的 `AsyncBus` 实例，每个消费者线程一个。

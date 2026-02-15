@@ -1,0 +1,42 @@
+name: Documentation
+
+on:
+  push:
+    branches: [ master, main ]
+  pull_request:
+    branches: [ master, main ]
+
+permissions:
+  contents: read
+
+jobs:
+  check-docs:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Check for broken links in markdown files
+      uses: gaurav-nelson/github-action-markdown-link-check@v1
+      with:
+        use-quiet-mode: 'yes'
+        config-file: '.github/markdown-link-check-config.json'
+        folder-path: '.'
+        file-path: './README.md, ./README_zh.md, ./CONTRIBUTING.md'
+        check-modified-files-only: 'no'
+      continue-on-error: true
+
+    - name: Verify all example files are referenced in docs
+      run: |
+        echo "Checking that all examples are mentioned in README..."
+        for example in examples/*.cpp; do
+          filename=$(basename "$example")
+          if ! grep -q "$filename" README.md && ! grep -q "$filename" README_zh.md; then
+            echo "Warning: $filename not referenced in README files"
+          fi
+        done
+
+    - name: Check for TODO/FIXME comments
+      run: |
+        echo "Checking for TODO/FIXME comments..."
+        find include examples tests \( -name '*.hpp' -o -name '*.cpp' \) | xargs grep -n "TODO\|FIXME" || true

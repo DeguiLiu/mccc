@@ -3,13 +3,14 @@
  * @brief Unit tests for priority-based admission control.
  */
 
+#include <atomic>
 #include <catch2/catch_test_macros.hpp>
 #include <mccc/mccc.hpp>
-
-#include <atomic>
 #include <thread>
 
-struct PrioMsg { int value; };
+struct PrioMsg {
+  int value;
+};
 using PrioPayload = std::variant<PrioMsg>;
 using PrioBus = mccc::AsyncBus<PrioPayload>;
 using PrioEnvelope = mccc::MessageEnvelope<PrioPayload>;

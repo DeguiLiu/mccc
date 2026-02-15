@@ -6,18 +6,18 @@
 #ifndef LOG_LEVEL
 #define LOG_LEVEL LOG_LEVEL_INFO
 #endif
-#include "log_macro.hpp"
 #include "bench_utils.hpp"
 #include "example_types.hpp"
+#include "log_macro.hpp"
 
-#include <mccc/component.hpp>
+#include <cmath>
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
-#include <cmath>
 #include <iomanip>
 #include <iostream>
+#include <mccc/component.hpp>
 #include <numeric>
 #include <thread>
 #include <vector>
@@ -46,7 +46,8 @@ struct Statistics {
 
 Statistics calculate_statistics(const std::vector<double>& data) {
   Statistics stats{};
-  if (data.empty()) return stats;
+  if (data.empty())
+    return stats;
 
   double sum = std::accumulate(data.begin(), data.end(), 0.0);
   stats.mean = sum / static_cast<double>(data.size());
@@ -103,7 +104,8 @@ class BenchmarkConsumer : public ExampleComponent {
     SubscribeSafe<MotionData>(
         [](std::shared_ptr<ExampleComponent> self_base, const MotionData& data, const MessageHeader& header) noexcept {
           auto self = std::static_pointer_cast<BenchmarkConsumer>(self_base);
-          if (self) self->on_motion(data, header);
+          if (self)
+            self->on_motion(data, header);
         });
   }
 
@@ -123,8 +125,8 @@ class BenchmarkConsumer : public ExampleComponent {
 BenchmarkResult run_single_benchmark(uint32_t message_count) {
   ExampleBus::Instance().ResetStatistics();
 
-  uint64_t timestamp_us = static_cast<uint64_t>(
-      duration_cast<microseconds>(system_clock::now().time_since_epoch()).count());
+  uint64_t timestamp_us =
+      static_cast<uint64_t>(duration_cast<microseconds>(system_clock::now().time_since_epoch()).count());
 
   auto start = high_resolution_clock::now();
 
@@ -132,8 +134,7 @@ BenchmarkResult run_single_benchmark(uint32_t message_count) {
     float fi = static_cast<float>(i);
     MotionData motion(fi * 0.1f, fi * 0.2f, fi * 0.3f, fi * 0.01f);
     if ((i % 100U) == 0U) {
-      timestamp_us = static_cast<uint64_t>(
-          duration_cast<microseconds>(system_clock::now().time_since_epoch()).count());
+      timestamp_us = static_cast<uint64_t>(duration_cast<microseconds>(system_clock::now().time_since_epoch()).count());
     }
     ExampleBus::Instance().PublishFast(std::move(motion), 100U, timestamp_us);
   }
@@ -187,8 +188,8 @@ void run_e2e_latency_test(uint32_t samples) {
     e2e::measurement_ready.store(false, std::memory_order_release);
     e2e::callback_timestamp_ns.store(0U, std::memory_order_release);
 
-    uint64_t publish_ns = static_cast<uint64_t>(
-        duration_cast<nanoseconds>(high_resolution_clock::now().time_since_epoch()).count());
+    uint64_t publish_ns =
+        static_cast<uint64_t>(duration_cast<nanoseconds>(high_resolution_clock::now().time_since_epoch()).count());
 
     MotionData motion(1.0f, 2.0f, 3.0f, 4.0f);
     ExampleBus::Instance().Publish(std::move(motion), 100U);
@@ -215,8 +216,8 @@ void run_e2e_latency_test(uint32_t samples) {
   }
 
   Statistics stats = calculate_statistics(latencies);
-  LOG_INFO("[E2E Latency] Mean=%.2f StdDev=%.2f P50=%.2f P95=%.2f P99=%.2f Max=%.2f ns",
-           stats.mean, stats.std_dev, stats.p50, stats.p95, stats.p99, stats.max_val);
+  LOG_INFO("[E2E Latency] Mean=%.2f StdDev=%.2f P50=%.2f P95=%.2f P99=%.2f Max=%.2f ns", stats.mean, stats.std_dev,
+           stats.p50, stats.p95, stats.p99, stats.max_val);
 }
 
 void run_performance_mode_comparison(uint32_t message_count, uint32_t rounds) {
@@ -275,16 +276,22 @@ void run_backpressure_test(uint32_t burst_size, std::atomic<bool>& pause_worker)
 
     if ((i % 10U) < 2U) {
       priority = MessagePriority::HIGH;
-      if (ExampleBus::Instance().PublishWithPriority(std::move(motion), 100U, priority)) ++high_sent;
-      else ++high_dropped;
+      if (ExampleBus::Instance().PublishWithPriority(std::move(motion), 100U, priority))
+        ++high_sent;
+      else
+        ++high_dropped;
     } else if ((i % 10U) < 5U) {
       priority = MessagePriority::MEDIUM;
-      if (ExampleBus::Instance().PublishWithPriority(std::move(motion), 100U, priority)) ++medium_sent;
-      else ++medium_dropped;
+      if (ExampleBus::Instance().PublishWithPriority(std::move(motion), 100U, priority))
+        ++medium_sent;
+      else
+        ++medium_dropped;
     } else {
       priority = MessagePriority::LOW;
-      if (ExampleBus::Instance().PublishWithPriority(std::move(motion), 100U, priority)) ++low_sent;
-      else ++low_dropped;
+      if (ExampleBus::Instance().PublishWithPriority(std::move(motion), 100U, priority))
+        ++low_sent;
+      else
+        ++low_dropped;
     }
   }
 
@@ -292,7 +299,8 @@ void run_backpressure_test(uint32_t burst_size, std::atomic<bool>& pause_worker)
   std::this_thread::sleep_for(milliseconds(500));
 
   double high_rate = (high_sent + high_dropped) > 0U ? (100.0 * high_dropped / (high_sent + high_dropped)) : 0.0;
-  double medium_rate = (medium_sent + medium_dropped) > 0U ? (100.0 * medium_dropped / (medium_sent + medium_dropped)) : 0.0;
+  double medium_rate =
+      (medium_sent + medium_dropped) > 0U ? (100.0 * medium_dropped / (medium_sent + medium_dropped)) : 0.0;
   double low_rate = (low_sent + low_dropped) > 0U ? (100.0 * low_dropped / (low_sent + low_dropped)) : 0.0;
 
   LOG_INFO("HIGH:   sent=%u, dropped=%u (%.1f%%)", high_sent, high_dropped, high_rate);
@@ -314,7 +322,8 @@ void run_sustained_test(uint32_t duration_sec) {
 
   while (duration_cast<seconds>(high_resolution_clock::now() - start).count() < static_cast<int64_t>(duration_sec)) {
     MotionData motion(1.0f, 2.0f, 3.0f, 4.0f);
-    if (ExampleBus::Instance().Publish(std::move(motion), 100U)) ++sent_count;
+    if (ExampleBus::Instance().Publish(std::move(motion), 100U))
+      ++sent_count;
   }
 
   auto end = high_resolution_clock::now();
@@ -323,8 +332,8 @@ void run_sustained_test(uint32_t duration_sec) {
 
   BusStatisticsSnapshot stats = ExampleBus::Instance().GetStatistics();
   LOG_INFO("Duration: %.2f s, Sent: %lu, Processed: %lu, Dropped: %lu, Throughput: %.2f M/s",
-           static_cast<double>(duration_us) / 1e6, sent_count, stats.messages_processed,
-           stats.messages_dropped, (static_cast<double>(sent_count) / static_cast<double>(duration_us)));
+           static_cast<double>(duration_us) / 1e6, sent_count, stats.messages_processed, stats.messages_dropped,
+           (static_cast<double>(sent_count) / static_cast<double>(duration_us)));
 }
 
 int main() {
@@ -332,8 +341,7 @@ int main() {
   LOG_INFO("   MCCC Performance Benchmark");
   LOG_INFO("========================================");
   LOG_INFO("Queue capacity: %u", ExampleBus::MAX_QUEUE_DEPTH);
-  LOG_INFO("MCCC_SINGLE_PRODUCER=%d, MCCC_SINGLE_CORE=%d",
-           MCCC_SINGLE_PRODUCER, MCCC_SINGLE_CORE);
+  LOG_INFO("MCCC_SINGLE_PRODUCER=%d, MCCC_SINGLE_CORE=%d", MCCC_SINGLE_PRODUCER, MCCC_SINGLE_CORE);
 
   if (bench::pin_thread_to_core(0)) {
     LOG_INFO("CPU affinity: core 0 (producer)");

@@ -8,12 +8,11 @@
  * - Data integrity verification (no lost or corrupted messages)
  */
 
-#include <catch2/catch_test_macros.hpp>
-#include <mccc/mccc.hpp>
-
 #include <algorithm>
 #include <atomic>
+#include <catch2/catch_test_macros.hpp>
 #include <chrono>
+#include <mccc/mccc.hpp>
 #include <numeric>
 #include <thread>
 #include <vector>
@@ -28,7 +27,9 @@ struct MtMsg {
   uint64_t checksum;  // thread_id ^ sequence for integrity check
 };
 
-struct MtMsgB { float value; };
+struct MtMsgB {
+  float value;
+};
 
 using MtPayload = std::variant<MtMsg, MtMsgB>;
 using MtBus = mccc::AsyncBus<MtPayload>;
@@ -74,7 +75,8 @@ TEST_CASE("4 producers, 1 consumer - data integrity", "[Multithread]") {
     }
     // Final drain
     for (int i = 0; i < 10; ++i) {
-      if (bus.ProcessBatch() == 0U) break;
+      if (bus.ProcessBatch() == 0U)
+        break;
     }
   });
 
@@ -83,7 +85,7 @@ TEST_CASE("4 producers, 1 consumer - data integrity", "[Multithread]") {
   std::atomic<uint32_t> total_published{0U};
 
   for (uint32_t t = 0U; t < NUM_THREADS; ++t) {
-    producers.emplace_back([&bus, &total_published, t]() {
+    producers.emplace_back([&bus, &total_published, t, MSGS_PER_THREAD]() {
       for (uint32_t i = 0U; i < MSGS_PER_THREAD; ++i) {
         MtMsg msg{t, i, t ^ i};
         if (bus.Publish(std::move(msg), t)) {
@@ -128,9 +130,8 @@ TEST_CASE("16 producers stress test - no crash", "[Multithread]") {
 
   std::atomic<uint32_t> received{0U};
 
-  auto handle = bus.Subscribe<MtMsg>([&received](const MtEnvelope&) {
-    received.fetch_add(1U, std::memory_order_relaxed);
-  });
+  auto handle =
+      bus.Subscribe<MtMsg>([&received](const MtEnvelope&) { received.fetch_add(1U, std::memory_order_relaxed); });
 
   std::atomic<bool> stop{false};
   std::thread consumer([&bus, &stop]() {
@@ -138,13 +139,14 @@ TEST_CASE("16 producers stress test - no crash", "[Multithread]") {
       bus.ProcessBatch();
     }
     for (int i = 0; i < 20; ++i) {
-      if (bus.ProcessBatch() == 0U) break;
+      if (bus.ProcessBatch() == 0U)
+        break;
     }
   });
 
   std::vector<std::thread> producers;
   for (uint32_t t = 0U; t < NUM_THREADS; ++t) {
-    producers.emplace_back([&bus, t]() {
+    producers.emplace_back([&bus, t, MSGS_PER_THREAD]() {
       for (uint32_t i = 0U; i < MSGS_PER_THREAD; ++i) {
         MtMsg msg{t, i, t ^ i};
         bus.Publish(std::move(msg), t);
@@ -187,7 +189,8 @@ TEST_CASE("32 producers burst - CAS contention", "[Multithread]") {
       bus.ProcessBatch();
     }
     for (int i = 0; i < 20; ++i) {
-      if (bus.ProcessBatch() == 0U) break;
+      if (bus.ProcessBatch() == 0U)
+        break;
     }
   });
 
@@ -196,7 +199,7 @@ TEST_CASE("32 producers burst - CAS contention", "[Multithread]") {
   std::vector<std::thread> producers;
 
   for (uint32_t t = 0U; t < NUM_THREADS; ++t) {
-    producers.emplace_back([&, t]() {
+    producers.emplace_back([&, t, MSGS_PER_THREAD]() {
       ready.fetch_add(1U, std::memory_order_release);
       while (ready.load(std::memory_order_acquire) < NUM_THREADS) {
         std::this_thread::yield();
@@ -249,7 +252,8 @@ TEST_CASE("Concurrent subscribe while publishing", "[Multithread]") {
       bus.ProcessBatch();
     }
     for (int i = 0; i < 10; ++i) {
-      if (bus.ProcessBatch() == 0U) break;
+      if (bus.ProcessBatch() == 0U)
+        break;
     }
   });
 
@@ -331,9 +335,8 @@ TEST_CASE("Producer-consumer message count consistency", "[Multithread]") {
   std::atomic<uint32_t> produced{0U};
   std::atomic<uint32_t> consumed{0U};
 
-  auto handle = bus.Subscribe<MtMsg>([&consumed](const MtEnvelope&) {
-    consumed.fetch_add(1U, std::memory_order_relaxed);
-  });
+  auto handle =
+      bus.Subscribe<MtMsg>([&consumed](const MtEnvelope&) { consumed.fetch_add(1U, std::memory_order_relaxed); });
 
   // Consumer thread
   std::atomic<bool> stop{false};

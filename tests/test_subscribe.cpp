@@ -3,14 +3,17 @@
  * @brief Unit tests for Subscribe/Unsubscribe lifecycle.
  */
 
+#include <atomic>
 #include <catch2/catch_test_macros.hpp>
 #include <mccc/component.hpp>
-
-#include <atomic>
 #include <memory>
 
-struct SubMsgA { int value; };
-struct SubMsgB { float data; };
+struct SubMsgA {
+  int value;
+};
+struct SubMsgB {
+  float data;
+};
 
 using SubPayload = std::variant<SubMsgA, SubMsgB>;
 using SubBus = mccc::AsyncBus<SubPayload>;
@@ -35,9 +38,7 @@ TEST_CASE("Unsubscribe stops callback", "[Subscribe]") {
 
   std::atomic<int> count{0};
 
-  auto handle = bus.Subscribe<SubMsgA>([&count](const SubEnvelope&) {
-    count.fetch_add(1, std::memory_order_relaxed);
-  });
+  auto handle = bus.Subscribe<SubMsgA>([&count](const SubEnvelope&) { count.fetch_add(1, std::memory_order_relaxed); });
 
   // Publish and process
   SubMsgA msg1{1};
@@ -72,13 +73,9 @@ TEST_CASE("Multiple subscribers for same type", "[Subscribe]") {
   std::atomic<int> count1{0};
   std::atomic<int> count2{0};
 
-  auto h1 = bus.Subscribe<SubMsgA>([&count1](const SubEnvelope&) {
-    count1.fetch_add(1, std::memory_order_relaxed);
-  });
+  auto h1 = bus.Subscribe<SubMsgA>([&count1](const SubEnvelope&) { count1.fetch_add(1, std::memory_order_relaxed); });
 
-  auto h2 = bus.Subscribe<SubMsgA>([&count2](const SubEnvelope&) {
-    count2.fetch_add(1, std::memory_order_relaxed);
-  });
+  auto h2 = bus.Subscribe<SubMsgA>([&count2](const SubEnvelope&) { count2.fetch_add(1, std::memory_order_relaxed); });
 
   SubMsgA msg{42};
   bus.Publish(std::move(msg), 1U);
@@ -119,13 +116,12 @@ class TestComponent : public SubComponent {
 
   void init() {
     InitializeComponent();
-    SubscribeSafe<SubMsgA>(
-        [](std::shared_ptr<SubComponent> self_base, const SubMsgA& msg, const mccc::MessageHeader&) {
-          auto self = std::static_pointer_cast<TestComponent>(self_base);
-          if (self) {
-            self->count_.fetch_add(1, std::memory_order_relaxed);
-          }
-        });
+    SubscribeSafe<SubMsgA>([](std::shared_ptr<SubComponent> self_base, const SubMsgA& msg, const mccc::MessageHeader&) {
+      auto self = std::static_pointer_cast<TestComponent>(self_base);
+      if (self) {
+        self->count_.fetch_add(1, std::memory_order_relaxed);
+      }
+    });
   }
 
   std::atomic<int> count_{0};
@@ -139,9 +135,8 @@ TEST_CASE("Component auto-unsubscribes on destruction", "[Subscribe]") {
   while (bus.ProcessBatch() > 0U) {}
 
   std::atomic<int> external_count{0};
-  auto ext_handle = bus.Subscribe<SubMsgA>([&external_count](const SubEnvelope&) {
-    external_count.fetch_add(1, std::memory_order_relaxed);
-  });
+  auto ext_handle = bus.Subscribe<SubMsgA>(
+      [&external_count](const SubEnvelope&) { external_count.fetch_add(1, std::memory_order_relaxed); });
 
   {
     auto component = TestComponent::create();
@@ -180,12 +175,15 @@ TEST_CASE("SubscribeSimple works", "[Subscribe]") {
       auto ptr = std::shared_ptr<SimpleComponent>(new SimpleComponent());
       ptr->InitializeComponent();
       ptr->SubscribeSimple<SubMsgB>(
-          [ptr](const SubMsgB& msg, const mccc::MessageHeader&) {
-            ptr->last_value_ = msg.data;
+          [weak = std::weak_ptr<SimpleComponent>(ptr)](const SubMsgB& msg, const mccc::MessageHeader&) {
+            if (auto self = weak.lock()) {
+              self->last_value_ = msg.data;
+            }
           });
       return ptr;
     }
     float last_value_ = 0.0f;
+
    private:
     SimpleComponent() = default;
   };

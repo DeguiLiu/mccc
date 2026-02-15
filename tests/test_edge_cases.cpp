@@ -3,10 +3,9 @@
  * @brief Edge case tests: queue full recovery, error callbacks, statistics accuracy.
  */
 
+#include <atomic>
 #include <catch2/catch_test_macros.hpp>
 #include <mccc/mccc.hpp>
-
-#include <atomic>
 #include <thread>
 #include <vector>
 
@@ -14,7 +13,9 @@
 // Test types
 // ============================================================================
 
-struct EdgeMsg { uint32_t value; };
+struct EdgeMsg {
+  uint32_t value;
+};
 using EdgePayload = std::variant<EdgeMsg>;
 using EdgeBus = mccc::AsyncBus<EdgePayload>;
 using EdgeEnvelope = mccc::MessageEnvelope<EdgePayload>;

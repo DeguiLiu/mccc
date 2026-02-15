@@ -84,7 +84,8 @@ class Component : public std::enable_shared_from_this<Component<PayloadVariant>>
   template <typename T, typename Func>
   void SubscribeSafe(Func&& callback) noexcept {
     SubscriptionHandle handle = BusType::Instance().template Subscribe<T>(
-        [weak_self = std::weak_ptr<Component>(this->shared_from_this()), cb = std::forward<Func>(callback)](const EnvelopeType& env) noexcept {
+        [weak_self = std::weak_ptr<Component>(this->shared_from_this()),
+         cb = std::forward<Func>(callback)](const EnvelopeType& env) noexcept {
           std::shared_ptr<Component> self = weak_self.lock();
           if (self != nullptr) {
             const T* data = std::get_if<T>(&env.payload);
