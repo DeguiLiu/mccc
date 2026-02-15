@@ -65,8 +65,8 @@ class Component : public std::enable_shared_from_this<Component<PayloadVariant>>
     }
   }
 
-  void InitializeComponent() noexcept { /* No-op, can be extended */
-  }
+  // No-op by default, can be extended by subclasses
+  void InitializeComponent() noexcept {}
 
  protected:
   Component() noexcept = default;
