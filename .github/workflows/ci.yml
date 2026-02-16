@@ -138,9 +138,7 @@ jobs:
 
     - name: Run cpplint (include/)
       run: |
-        cpplint --recursive --linelength=100 \
-          --filter=-legal/copyright,-build/header_guard,-build/include_order,-whitespace/indent_namespace,-build/include_what_you_use \
-          include/ || true
+        cpplint --recursive include/
 
     - name: Run clang-tidy (include/)
       run: |
