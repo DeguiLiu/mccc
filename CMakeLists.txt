@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.14)
-project(mccc VERSION 1.0.0 LANGUAGES CXX)
+project(mccc VERSION 0.2.1 LANGUAGES CXX)
 
 # --- Core: header-only interface library ---
 add_library(mccc INTERFACE)

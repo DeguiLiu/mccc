@@ -104,6 +104,7 @@ class FixedString {
    * @param str String literal
    */
   template <uint32_t N, typename = typename std::enable_if<(N <= Capacity + 1U)>::type>
+  // NOLINTNEXTLINE(google-explicit-constructor, cppcoreguidelines-pro-type-member-init)
   FixedString(const char (&str)[N]) noexcept : size_(N - 1U) {
     static_assert(N > 0U, "String literal must include null terminator");
     static_assert(N - 1U <= Capacity, "String literal exceeds FixedString capacity");
@@ -115,6 +116,7 @@ class FixedString {
    * @param tag TruncateToCapacity tag
    * @param str Source C-string (must be null-terminated)
    */
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-member-init)
   FixedString(TruncateToCapacity_t /*tag*/, const char* str) noexcept : size_(0U) {
     if (str != nullptr) {
       uint32_t i = 0U;
@@ -133,6 +135,7 @@ class FixedString {
    * @param str Source buffer
    * @param count Number of characters to copy
    */
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-member-init)
   FixedString(TruncateToCapacity_t /*tag*/, const char* str, uint32_t count) noexcept : size_(0U) {
     if (str != nullptr) {
       size_ = (count < Capacity) ? count : Capacity;
@@ -146,23 +149,24 @@ class FixedString {
    * @param tag TruncateToCapacity tag
    * @param str Source std::string
    */
-  FixedString(TruncateToCapacity_t /*tag*/, const std::string& str) noexcept : size_(0U) {
-    size_ = (static_cast<uint32_t>(str.size()) < Capacity) ? static_cast<uint32_t>(str.size()) : Capacity;
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-member-init)
+  FixedString(TruncateToCapacity_t /*tag*/, const std::string& str) noexcept
+      : size_((static_cast<uint32_t>(str.size()) < Capacity) ? static_cast<uint32_t>(str.size()) : Capacity) {
     (void)std::memcpy(buf_, str.c_str(), size_);
     buf_[size_] = '\0';
   }
 
   /** @brief Get null-terminated C string */
-  constexpr const char* c_str() const noexcept { return buf_; }
+  [[nodiscard]] constexpr const char* c_str() const noexcept { return buf_; }
 
   /** @brief Get current string length */
-  constexpr uint32_t size() const noexcept { return size_; }
+  [[nodiscard]] constexpr uint32_t size() const noexcept { return size_; }
 
   /** @brief Get maximum capacity */
-  static constexpr uint32_t capacity() noexcept { return Capacity; }
+  [[nodiscard]] static constexpr uint32_t capacity() noexcept { return Capacity; }
 
   /** @brief Check if empty */
-  constexpr bool empty() const noexcept { return size_ == 0U; }
+  [[nodiscard]] constexpr bool empty() const noexcept { return size_ == 0U; }
 
   /** @brief Equality comparison with another FixedString */
   template <uint32_t N>
@@ -248,13 +252,14 @@ class FixedVector final {
   using const_iterator = const T*;
 
   /** @brief Default constructor - empty vector */
-  FixedVector() noexcept : size_(0U) {}
+  FixedVector() noexcept = default;  // NOLINT(cppcoreguidelines-pro-type-member-init)
 
   /** @brief Destructor - explicitly destroys all elements */
   ~FixedVector() noexcept { clear(); }
 
   /** @brief Copy constructor */
-  FixedVector(const FixedVector& other) noexcept : size_(0U) {
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-member-init)
+  FixedVector(const FixedVector& other) noexcept {
     for (uint32_t i = 0U; i < other.size_; ++i) {
       (void)push_back(other.at_unchecked(i));
     }
@@ -272,7 +277,8 @@ class FixedVector final {
   }
 
   /** @brief Move constructor */
-  FixedVector(FixedVector&& other) noexcept : size_(0U) {
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-member-init)
+  FixedVector(FixedVector&& other) noexcept {
     for (uint32_t i = 0U; i < other.size_; ++i) {
       (void)emplace_back(std::move(other.at_unchecked(i)));
     }
@@ -293,31 +299,31 @@ class FixedVector final {
 
   // ======================== Element Access ========================
 
-  reference operator[](uint32_t index) noexcept { return at_unchecked(index); }
-  const_reference operator[](uint32_t index) const noexcept { return at_unchecked(index); }
+  [[nodiscard]] reference operator[](uint32_t index) noexcept { return at_unchecked(index); }
+  [[nodiscard]] const_reference operator[](uint32_t index) const noexcept { return at_unchecked(index); }
 
-  reference front() noexcept { return at_unchecked(0U); }
-  const_reference front() const noexcept { return at_unchecked(0U); }
+  [[nodiscard]] reference front() noexcept { return at_unchecked(0U); }
+  [[nodiscard]] const_reference front() const noexcept { return at_unchecked(0U); }
 
-  reference back() noexcept { return at_unchecked(size_ - 1U); }
-  const_reference back() const noexcept { return at_unchecked(size_ - 1U); }
+  [[nodiscard]] reference back() noexcept { return at_unchecked(size_ - 1U); }
+  [[nodiscard]] const_reference back() const noexcept { return at_unchecked(size_ - 1U); }
 
-  pointer data() noexcept { return reinterpret_cast<T*>(storage_); }
-  const_pointer data() const noexcept { return reinterpret_cast<const T*>(storage_); }
+  [[nodiscard]] pointer data() noexcept { return reinterpret_cast<T*>(storage_); }
+  [[nodiscard]] const_pointer data() const noexcept { return reinterpret_cast<const T*>(storage_); }
 
   // ======================== Iterators ========================
 
-  iterator begin() noexcept { return data(); }
-  const_iterator begin() const noexcept { return data(); }
-  iterator end() noexcept { return data() + size_; }
-  const_iterator end() const noexcept { return data() + size_; }
+  [[nodiscard]] iterator begin() noexcept { return data(); }
+  [[nodiscard]] const_iterator begin() const noexcept { return data(); }
+  [[nodiscard]] iterator end() noexcept { return data() + size_; }
+  [[nodiscard]] const_iterator end() const noexcept { return data() + size_; }
 
   // ======================== Capacity ========================
 
-  bool empty() const noexcept { return size_ == 0U; }
-  uint32_t size() const noexcept { return size_; }
-  static constexpr uint32_t capacity() noexcept { return Capacity; }
-  bool full() const noexcept { return size_ >= Capacity; }
+  [[nodiscard]] bool empty() const noexcept { return size_ == 0U; }
+  [[nodiscard]] uint32_t size() const noexcept { return size_; }
+  [[nodiscard]] static constexpr uint32_t capacity() noexcept { return Capacity; }
+  [[nodiscard]] bool full() const noexcept { return size_ >= Capacity; }
 
   // ======================== Modifiers ========================
 
@@ -363,14 +369,14 @@ class FixedVector final {
   }
 
  private:
-  reference at_unchecked(uint32_t index) noexcept { return *(reinterpret_cast<T*>(storage_) + index); }
+  [[nodiscard]] reference at_unchecked(uint32_t index) noexcept { return *(reinterpret_cast<T*>(storage_) + index); }
 
-  const_reference at_unchecked(uint32_t index) const noexcept {
+  [[nodiscard]] const_reference at_unchecked(uint32_t index) const noexcept {
     return *(reinterpret_cast<const T*>(storage_) + index);
   }
 
   alignas(T) uint8_t storage_[sizeof(T) * Capacity];
-  uint32_t size_;
+  uint32_t size_{0U};
 };
 
 // ============================================================================
@@ -421,20 +427,21 @@ class FixedFunction<R(Args...), Capacity> {
  public:
   // ---- Constructors / assignment ----
 
-  FixedFunction() noexcept : ops_(nullptr) {}
+  FixedFunction() noexcept : ops_(nullptr) {}  // NOLINT(cppcoreguidelines-pro-type-member-init)
 
-  // NOLINTNEXTLINE(runtime/explicit)
+  // NOLINTNEXTLINE(google-explicit-constructor, runtime/explicit, cppcoreguidelines-pro-type-member-init)
   FixedFunction(std::nullptr_t) noexcept : ops_(nullptr) {}
 
   template <typename F, typename DecayF = typename std::decay<F>::type,
             typename = typename std::enable_if<!std::is_same<DecayF, FixedFunction>::value>::type>
-  // NOLINTNEXTLINE(runtime/explicit)
+  // NOLINTNEXTLINE(google-explicit-constructor, runtime/explicit, cppcoreguidelines-pro-type-member-init)
   FixedFunction(F&& f) noexcept : ops_(&OpsFor<DecayF>::kInstance) {
     static_assert(sizeof(DecayF) <= Capacity, "Callable exceeds FixedFunction inline capacity");
     static_assert(std::is_nothrow_move_constructible<DecayF>::value, "Callable must be nothrow move constructible");
     new (static_cast<void*>(&storage_)) DecayF(std::forward<F>(f));
   }
 
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-member-init)
   FixedFunction(FixedFunction&& other) noexcept : ops_(other.ops_) {
     if (ops_ != nullptr) {
       ops_->move(&other.storage_, &storage_);
@@ -1037,7 +1044,6 @@ class AsyncBus {
         cached_consumer_pos_(0U),
         consumer_pos_(0U),
         next_msg_id_(1U),
-        next_callback_id_(1U),
         stats_() {
     for (uint32_t i = 0U; i < BUFFER_SIZE; ++i) {
       ring_buffer_[i].sequence.store(i, std::memory_order_relaxed);
@@ -1045,10 +1051,10 @@ class AsyncBus {
   }
 
   ~AsyncBus() = default;
-  AsyncBus(const AsyncBus&) = delete;
-  AsyncBus& operator=(const AsyncBus&) = delete;
-  AsyncBus(AsyncBus&&) = delete;
-  AsyncBus& operator=(AsyncBus&&) = delete;
+  AsyncBus(const AsyncBus&) = delete;             // NOLINT(modernize-use-equals-delete)
+  AsyncBus& operator=(const AsyncBus&) = delete;  // NOLINT(modernize-use-equals-delete)
+  AsyncBus(AsyncBus&&) = delete;                   // NOLINT(modernize-use-equals-delete)
+  AsyncBus& operator=(AsyncBus&&) = delete;        // NOLINT(modernize-use-equals-delete)
 
   uint32_t GetThresholdForPriority(MessagePriority priority) const noexcept {
     switch (priority) {
@@ -1102,8 +1108,8 @@ class AsyncBus {
       }
     }
 
-    uint32_t prod_pos;
-    RingBufferNode* node;
+    uint32_t prod_pos = 0U;
+    RingBufferNode* node = nullptr;
 
 #if MCCC_SINGLE_PRODUCER
     prod_pos = producer_pos_.load(std::memory_order_relaxed);
@@ -1241,7 +1247,7 @@ class AsyncBus {
   std::atomic<uint32_t> cached_consumer_pos_{0U};
   MCCC_ALIGN_CACHELINE std::atomic<uint32_t> consumer_pos_;
   MCCC_ALIGN_CACHELINE std::atomic<uint64_t> next_msg_id_;
-  size_t next_callback_id_;
+  size_t next_callback_id_{1U};
   MCCC_ALIGN_CACHELINE BusStatistics stats_;
   std::array<CallbackSlot, MCCC_MAX_MESSAGE_TYPES> callback_table_;
   mutable std::shared_mutex callback_mutex_;
