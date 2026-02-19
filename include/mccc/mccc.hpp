@@ -1039,12 +1039,7 @@ class AsyncBus {
     return true;
   }
 
-  AsyncBus() noexcept
-      : producer_pos_(0U),
-        cached_consumer_pos_(0U),
-        consumer_pos_(0U),
-        next_msg_id_(1U),
-        stats_() {
+  AsyncBus() noexcept : producer_pos_(0U), cached_consumer_pos_(0U), consumer_pos_(0U), next_msg_id_(1U), stats_() {
     for (uint32_t i = 0U; i < BUFFER_SIZE; ++i) {
       ring_buffer_[i].sequence.store(i, std::memory_order_relaxed);
     }
@@ -1053,8 +1048,8 @@ class AsyncBus {
   ~AsyncBus() = default;
   AsyncBus(const AsyncBus&) = delete;             // NOLINT(modernize-use-equals-delete)
   AsyncBus& operator=(const AsyncBus&) = delete;  // NOLINT(modernize-use-equals-delete)
-  AsyncBus(AsyncBus&&) = delete;                   // NOLINT(modernize-use-equals-delete)
-  AsyncBus& operator=(AsyncBus&&) = delete;        // NOLINT(modernize-use-equals-delete)
+  AsyncBus(AsyncBus&&) = delete;                  // NOLINT(modernize-use-equals-delete)
+  AsyncBus& operator=(AsyncBus&&) = delete;       // NOLINT(modernize-use-equals-delete)
 
   uint32_t GetThresholdForPriority(MessagePriority priority) const noexcept {
     switch (priority) {
