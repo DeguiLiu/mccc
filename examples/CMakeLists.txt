@@ -1,3 +1,5 @@
+add_compile_definitions(MCCC_ALLOW_UNSAFE_PERFORMANCE_MODES=1)
+
 add_executable(mccc_simple_demo simple_demo.cpp)
 target_link_libraries(mccc_simple_demo mccc_extras pthread)
 

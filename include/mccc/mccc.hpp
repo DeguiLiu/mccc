@@ -67,6 +67,12 @@
 #include <type_traits>
 #include <variant>
 
+#if defined(__cpp_exceptions) || defined(__EXCEPTIONS)
+#define MCCC_HAS_EXCEPTIONS 1
+#else
+#define MCCC_HAS_EXCEPTIONS 0
+#endif
+
 namespace mccc {
 
 // ============================================================================
@@ -479,12 +485,20 @@ class FixedFunction<R(Args...), Capacity> {
 
   // ---- Invocation ----
 
-  R operator()(Args... args) const noexcept {
+  /**
+   * @brief Invoke the stored callable. May propagate exceptions from it.
+   *
+   * The bus catches these exceptions and converts them into PROCESSING_ERROR
+   * diagnostics when exceptions are enabled.
+   */
+  R Invoke(Args... args) const {
     if (ops_ != nullptr) {
       return ops_->invoke(&storage_, std::forward<Args>(args)...);
     }
     return ReturnDefault();
   }
+
+  R operator()(Args... args) const noexcept { return Invoke(std::forward<Args>(args)...); }
 
  private:
   // ---- Ops vtable for type erasure ----
@@ -492,7 +506,7 @@ class FixedFunction<R(Args...), Capacity> {
   struct Ops {
     void (*destroy)(void* storage) noexcept;
     void (*move)(void* src, void* dst) noexcept;
-    R (*invoke)(const void* storage, Args... args) noexcept;
+    R (*invoke)(const void* storage, Args... args);
   };
 
   template <typename F>
@@ -502,7 +516,7 @@ class FixedFunction<R(Args...), Capacity> {
       new (dst) F(std::move(*static_cast<F*>(src)));
       static_cast<F*>(src)->~F();
     }
-    static R DoInvoke(const void* storage, Args... args) noexcept {
+    static R DoInvoke(const void* storage, Args... args) {
       return (*const_cast<F*>(static_cast<const F*>(storage)))(std::forward<Args>(args)...);
     }
     static constexpr Ops kInstance{&DoDestroy, &DoMove, &DoInvoke};
@@ -630,6 +644,22 @@ struct MessageEnvelope {
 #define MCCC_MAX_CALLBACKS_PER_TYPE 16U
 #endif
 
+#ifndef MCCC_MAX_DEFERRED_UNSUBSCRIBE
+#define MCCC_MAX_DEFERRED_UNSUBSCRIBE 32U
+#endif
+
+// BARE_METAL and NO_STATS bypass admission and/or statistics. They are opt-in
+// so a default build keeps the full safety checks.
+#ifndef MCCC_ALLOW_UNSAFE_PERFORMANCE_MODES
+#define MCCC_ALLOW_UNSAFE_PERFORMANCE_MODES 0
+#endif
+
+// Safety build: reject targets where 32/64-bit atomics or function-pointer
+// atomics are not lock-free, because they may silently use runtime locks.
+#ifndef MCCC_REQUIRE_LOCKFREE_ATOMICS
+#define MCCC_REQUIRE_LOCKFREE_ATOMICS 1
+#endif
+
 // Single-core mode: disable cache-line alignment (no false sharing concern) + relaxed memory ordering
 #if MCCC_SINGLE_CORE
 #define MCCC_ALIGN_CACHELINE
@@ -694,9 +724,21 @@ struct VariantIndex<T, std::variant<Types...>> {
 // Bus Error Types
 // ============================================================================
 
-enum class BusError : uint8_t { QUEUE_FULL = 0U, INVALID_MESSAGE = 1U, PROCESSING_ERROR = 2U, OVERFLOW_DETECTED = 3U };
+enum class BusError : uint8_t {
+  QUEUE_FULL = 0U,
+  INVALID_MESSAGE = 1U,
+  PROCESSING_ERROR = 2U,
+  OVERFLOW_DETECTED = 3U,
+  CALLBACKS_FULL = 4U,
+  REENTRANT_CONSUMER = 5U,
+  NOT_INITIALIZED = 6U,
+  REENTRANT_SUBSCRIBE = 7U,
+  DEFERRED_QUEUE_FULL = 8U,
+  INVALID_MODE = 9U
+};
 
 using ErrorCallback = void (*)(BusError, uint64_t);
+using ErrorCallbackEx = void (*)(void* context, BusError, uint64_t);
 
 // ============================================================================
 // Statistics
@@ -764,6 +806,8 @@ enum class BackpressureLevel : uint8_t {
 struct SubscriptionHandle {
   size_t type_index;  /**< Message type index */
   size_t callback_id; /**< Callback ID within type */
+
+  bool IsValid() const noexcept { return callback_id != static_cast<size_t>(-1); }
 };
 
 // ============================================================================
@@ -793,6 +837,23 @@ class AsyncBus {
   static constexpr uint32_t BACKPRESSURE_WARNING_THRESHOLD = (MAX_QUEUE_DEPTH * 75U) / 100U;
   static constexpr uint32_t BACKPRESSURE_CRITICAL_THRESHOLD = (MAX_QUEUE_DEPTH * 90U) / 100U;
 
+  static_assert(std::variant_size<PayloadVariant>::value <= MCCC_MAX_MESSAGE_TYPES,
+                "PayloadVariant has more alternatives than MCCC_MAX_MESSAGE_TYPES");
+  static_assert(std::is_nothrow_move_constructible<PayloadVariant>::value,
+                "PayloadVariant must be nothrow move constructible");
+  static_assert(std::is_nothrow_move_assignable<PayloadVariant>::value,
+                "PayloadVariant must be nothrow move assignable");
+  static_assert(MAX_QUEUE_DEPTH <= 0x7FFFFFFFU, "MCCC_QUEUE_DEPTH too large: sequence markers may alias");
+  static_assert(MCCC_MAX_DEFERRED_UNSUBSCRIBE > 0U, "MCCC_MAX_DEFERRED_UNSUBSCRIBE must be greater than 0");
+#if MCCC_REQUIRE_LOCKFREE_ATOMICS
+  static_assert(std::atomic<uint32_t>::is_always_lock_free, "32-bit atomics must be lock-free");
+  static_assert(std::atomic<uint64_t>::is_always_lock_free,
+                "64-bit atomics must be lock-free; use 32-bit counters on this target");
+  static_assert(std::atomic<ErrorCallback>::is_always_lock_free, "function-pointer atomics must be lock-free");
+  static_assert(std::atomic<ErrorCallbackEx>::is_always_lock_free, "function-pointer atomics must be lock-free");
+  static_assert(std::atomic<void*>::is_always_lock_free, "pointer atomics must be lock-free");
+#endif
+
   using CallbackType = FixedFunction<void(const EnvelopeType&), 64U>;
 
   static AsyncBus& Instance() noexcept {
@@ -800,7 +861,29 @@ class AsyncBus {
     return instance;
   }
 
-  void SetErrorCallback(ErrorCallback callback) noexcept { error_callback_.store(callback, std::memory_order_release); }
+  void SetErrorCallback(ErrorCallback callback) noexcept {
+    error_callback_ex_.store(nullptr, std::memory_order_release);
+    error_callback_.store(callback, std::memory_order_release);
+  }
+
+  void SetErrorCallback(ErrorCallbackEx callback, void* context) noexcept {
+    error_callback_.store(nullptr, std::memory_order_release);
+    error_context_.store(context, std::memory_order_release);
+    error_callback_ex_.store(callback, std::memory_order_release);
+  }
+
+  /**
+   * @brief Mark the bus as running. Call before starting producers/consumers.
+   *
+   * The constructor leaves the bus RUNNING for backward compatibility; this
+   * method is idempotent and mainly documents the intended startup order.
+   */
+  void Init() noexcept { shutdown_.store(false, std::memory_order_release); }
+
+  /** @brief Stop accepting new messages. Processing of queued messages may continue. */
+  void Shutdown() noexcept { shutdown_.store(true, std::memory_order_release); }
+
+  bool IsRunning() const noexcept { return !shutdown_.load(std::memory_order_acquire); }
 
   BusStatisticsSnapshot GetStatistics() const noexcept {
     return BusStatisticsSnapshot{stats_.messages_published.load(std::memory_order_relaxed),
@@ -819,28 +902,43 @@ class AsyncBus {
 
   void ResetStatistics() noexcept { stats_.Reset(); }
 
-  void SetPerformanceMode(PerformanceMode mode) noexcept { performance_mode_.store(mode, std::memory_order_relaxed); }
+  // BARE_METAL and NO_STATS bypass admission and/or statistics. Use only when
+  // the subscription table is frozen for the lifetime of the process.
+  void SetPerformanceMode(PerformanceMode mode) noexcept {
+#if !MCCC_ALLOW_UNSAFE_PERFORMANCE_MODES
+    if (mode != PerformanceMode::FULL_FEATURED) {
+      ReportError(BusError::INVALID_MODE, 0U);
+      return;
+    }
+#endif
+    performance_mode_.store(mode, std::memory_order_relaxed);
+  }
 
   // ======================== Publish API ========================
 
-  bool Publish(PayloadVariant&& payload, uint32_t sender_id) noexcept {
+  [[nodiscard]] bool Publish(PayloadVariant&& payload, uint32_t sender_id) noexcept {
     return PublishInternal(std::move(payload), sender_id, GetTimestampUs(), MessagePriority::MEDIUM);
   }
 
-  bool PublishWithPriority(PayloadVariant&& payload, uint32_t sender_id, MessagePriority priority) noexcept {
+  [[nodiscard]] bool PublishWithPriority(PayloadVariant&& payload, uint32_t sender_id,
+                                         MessagePriority priority) noexcept {
     return PublishInternal(std::move(payload), sender_id, GetTimestampUs(), priority);
   }
 
-  bool PublishFast(PayloadVariant&& payload, uint32_t sender_id, uint64_t timestamp_us) noexcept {
+  [[nodiscard]] bool PublishFast(PayloadVariant&& payload, uint32_t sender_id, uint64_t timestamp_us) noexcept {
     return PublishInternal(std::move(payload), sender_id, timestamp_us, MessagePriority::MEDIUM);
   }
 
   // ======================== Subscribe API ========================
 
   template <typename T, typename Func>
-  SubscriptionHandle Subscribe(Func&& func) {
+  [[nodiscard]] SubscriptionHandle Subscribe(Func&& func) {
     constexpr size_t type_idx = VariantIndex<T, PayloadVariant>::value;
     static_assert(type_idx < MCCC_MAX_MESSAGE_TYPES, "Type index exceeds MCCC_MAX_MESSAGE_TYPES");
+    if (dispatch_depth_ > 0U) {
+      ReportError(BusError::REENTRANT_SUBSCRIBE, 0U);
+      return SubscriptionHandle{type_idx, static_cast<size_t>(-1)};
+    }
 
     std::unique_lock<std::shared_mutex> lock(callback_mutex_);
 
@@ -857,14 +955,157 @@ class AsyncBus {
       }
     }
 
+    // Report outside the lock: the error callback may itself call
+    // Subscribe/Unsubscribe, which would deadlock on a held unique_lock.
+    lock.unlock();
+    ReportError(BusError::CALLBACKS_FULL, 0U);
     return SubscriptionHandle{type_idx, static_cast<size_t>(-1)};
   }
 
-  bool Unsubscribe(const SubscriptionHandle& handle) noexcept {
+  [[nodiscard]] bool Unsubscribe(const SubscriptionHandle& handle) noexcept {
     if (handle.type_index >= MCCC_MAX_MESSAGE_TYPES) {
       return false;
     }
 
+    if (dispatch_depth_ > 0U) {
+      if (deferred_count_ >= MCCC_MAX_DEFERRED_UNSUBSCRIBE) {
+        ReportError(BusError::DEFERRED_QUEUE_FULL, 0U);
+        return false;
+      }
+      deferred_unsub_[deferred_count_++] = handle;
+      return true;
+    }
+
+    return UnsubscribeNow(handle);
+  }
+
+  // ======================== Processing API ========================
+
+  uint32_t ProcessBatch() noexcept {
+    if (consumer_busy_.exchange(true, std::memory_order_acquire)) {
+      ReportError(BusError::REENTRANT_CONSUMER, 0U);
+      return 0U;
+    }
+
+    uint32_t processed = 0U;
+    uint32_t cons_pos = consumer_pos_.load(std::memory_order_relaxed);
+    const PerformanceMode mode = performance_mode_.load(std::memory_order_relaxed);
+    const bool bare_metal = (mode == PerformanceMode::BARE_METAL);
+    const bool no_stats = bare_metal || (mode == PerformanceMode::NO_STATS);
+    for (uint32_t i = 0U; i < BATCH_PROCESS_SIZE; ++i) {
+      if (!ProcessOneInBatch(cons_pos, bare_metal)) {
+        break;
+      }
+      ++cons_pos;
+      ++processed;
+    }
+    if (processed > 0U) {
+      if (!no_stats) {
+        stats_.messages_processed.fetch_add(processed, std::memory_order_relaxed);
+      }
+    }
+    DrainDeferredUnsubscribes();
+    consumer_busy_.store(false, std::memory_order_release);
+    return processed;
+  }
+
+  /**
+   * @brief Zero-overhead compile-time dispatch using a visitor.
+   *
+   * Bypasses callback_table_ and shared_mutex entirely.
+   * The visitor must handle all types in PayloadVariant.
+   * Single consumer only (same constraint as ProcessBatch).
+   *
+   * @tparam Visitor A callable that accepts all types in PayloadVariant
+   * @return Number of messages processed
+   */
+  template <typename Visitor>
+  uint32_t ProcessBatchWith(Visitor&& vis) noexcept {
+    if (consumer_busy_.exchange(true, std::memory_order_acquire)) {
+      ReportError(BusError::REENTRANT_CONSUMER, 0U);
+      return 0U;
+    }
+
+    const PerformanceMode mode = performance_mode_.load(std::memory_order_relaxed);
+    const bool no_stats = (mode == PerformanceMode::BARE_METAL) || (mode == PerformanceMode::NO_STATS);
+    uint32_t processed = 0U;
+    uint32_t cons_pos = consumer_pos_.load(std::memory_order_relaxed);
+    for (uint32_t i = 0U; i < BATCH_PROCESS_SIZE; ++i) {
+      RingBufferNode& node = ring_buffer_[cons_pos & BUFFER_MASK];
+      uint32_t expected_seq = cons_pos + 1U;
+      uint32_t seq = node.sequence.load(MCCC_MO_ACQUIRE);
+      detail::AcquireFence();
+      if (seq != expected_seq) {
+        break;
+      }
+      if (node.envelope.payload.valueless_by_exception()) {
+        stats_.processing_errors.fetch_add(1U, std::memory_order_relaxed);
+        ReportError(BusError::INVALID_MESSAGE, node.envelope.header.msg_id);
+      } else {
+        InvokeVisitor(vis, node.envelope.payload, node.envelope.header.msg_id);
+      }
+      detail::ReleaseFence();
+      node.sequence.store(cons_pos + BUFFER_SIZE, MCCC_MO_RELEASE);
+      consumer_pos_.store(cons_pos + 1U, std::memory_order_relaxed);
+      ++cons_pos;
+      ++processed;
+    }
+    if (processed > 0U) {
+      if (!no_stats) {
+        stats_.messages_processed.fetch_add(processed, std::memory_order_relaxed);
+      }
+    }
+    DrainDeferredUnsubscribes();
+    consumer_busy_.store(false, std::memory_order_release);
+    return processed;
+  }
+
+  // ======================== Queue Status API ========================
+
+  uint32_t QueueDepth() const noexcept {
+    uint32_t prod = producer_pos_.load(std::memory_order_acquire);
+    uint32_t cons = consumer_pos_.load(std::memory_order_acquire);
+    return prod - cons;
+  }
+
+  uint32_t QueueUtilizationPercent() const noexcept { return (QueueDepth() * 100U) / MAX_QUEUE_DEPTH; }
+
+  /**
+   * @brief Consumer progress cursor, for external liveness monitoring.
+   *
+   * Advances whenever the consumer commits messages. A watchdog should sample
+   * this on its own tick and treat "queue non-empty and cursor unchanged" as a
+   * consumer stall. The bus itself never reads a clock on the hot path.
+   */
+  uint32_t ConsumerPosition() const noexcept { return consumer_pos_.load(std::memory_order_relaxed); }
+
+  /**
+   * @brief Compare a previously sampled cursor against the current state.
+   *
+   * @param previously_sampled Value returned by an earlier ConsumerPosition().
+   * @return true if the queue is empty or the consumer has advanced since the
+   *         sample; false if messages are pending and no progress was made.
+   */
+  bool HasConsumerProgress(uint32_t previously_sampled) const noexcept {
+    return QueueDepth() == 0U || consumer_pos_.load(std::memory_order_relaxed) != previously_sampled;
+  }
+
+  BackpressureLevel GetBackpressureLevel() const noexcept {
+    uint32_t depth = QueueDepth();
+    if (depth >= MAX_QUEUE_DEPTH) {
+      return BackpressureLevel::FULL;
+    }
+    if (depth >= BACKPRESSURE_CRITICAL_THRESHOLD) {
+      return BackpressureLevel::CRITICAL;
+    }
+    if (depth >= BACKPRESSURE_WARNING_THRESHOLD) {
+      return BackpressureLevel::WARNING;
+    }
+    return BackpressureLevel::NORMAL;
+  }
+
+ private:
+  bool UnsubscribeNow(const SubscriptionHandle& handle) noexcept {
     CallbackType old_callback;  // destroyed outside lock to avoid use-after-free
     {
       std::unique_lock<std::shared_mutex> lock(callback_mutex_);
@@ -884,89 +1125,14 @@ class AsyncBus {
     return static_cast<bool>(old_callback);
   }
 
-  // ======================== Processing API ========================
-
-  uint32_t ProcessBatch() noexcept {
-    uint32_t processed = 0U;
-    uint32_t cons_pos = consumer_pos_.load(std::memory_order_relaxed);
-    const PerformanceMode mode = performance_mode_.load(std::memory_order_relaxed);
-    const bool bare_metal = (mode == PerformanceMode::BARE_METAL);
-    const bool no_stats = bare_metal || (mode == PerformanceMode::NO_STATS);
-    for (uint32_t i = 0U; i < BATCH_PROCESS_SIZE; ++i) {
-      if (!ProcessOneInBatch(cons_pos, bare_metal)) {
-        break;
-      }
-      ++cons_pos;
-      ++processed;
+  void DrainDeferredUnsubscribes() noexcept {
+    uint32_t count = deferred_count_;
+    deferred_count_ = 0U;
+    for (uint32_t i = 0U; i < count; ++i) {
+      (void)UnsubscribeNow(deferred_unsub_[i]);
     }
-    if (processed > 0U) {
-      consumer_pos_.store(cons_pos, std::memory_order_relaxed);
-      if (!no_stats) {
-        stats_.messages_processed.fetch_add(processed, std::memory_order_relaxed);
-      }
-    }
-    return processed;
   }
 
-  /**
-   * @brief Zero-overhead compile-time dispatch using a visitor.
-   *
-   * Bypasses callback_table_ and shared_mutex entirely.
-   * The visitor must handle all types in PayloadVariant.
-   * Single consumer only (same constraint as ProcessBatch).
-   *
-   * @tparam Visitor A callable that accepts all types in PayloadVariant
-   * @return Number of messages processed
-   */
-  template <typename Visitor>
-  uint32_t ProcessBatchWith(Visitor&& vis) noexcept {
-    uint32_t processed = 0U;
-    uint32_t cons_pos = consumer_pos_.load(std::memory_order_relaxed);
-    for (uint32_t i = 0U; i < BATCH_PROCESS_SIZE; ++i) {
-      RingBufferNode& node = ring_buffer_[cons_pos & BUFFER_MASK];
-      uint32_t expected_seq = cons_pos + 1U;
-      uint32_t seq = node.sequence.load(MCCC_MO_ACQUIRE);
-      detail::AcquireFence();
-      if (seq != expected_seq) {
-        break;
-      }
-      std::visit(vis, node.envelope.payload);
-      detail::ReleaseFence();
-      node.sequence.store(cons_pos + BUFFER_SIZE, MCCC_MO_RELEASE);
-      ++cons_pos;
-      ++processed;
-    }
-    if (processed > 0U) {
-      consumer_pos_.store(cons_pos, std::memory_order_relaxed);
-    }
-    return processed;
-  }
-
-  // ======================== Queue Status API ========================
-
-  uint32_t QueueDepth() const noexcept {
-    uint32_t prod = producer_pos_.load(std::memory_order_acquire);
-    uint32_t cons = consumer_pos_.load(std::memory_order_acquire);
-    return prod - cons;
-  }
-
-  uint32_t QueueUtilizationPercent() const noexcept { return (QueueDepth() * 100U) / MAX_QUEUE_DEPTH; }
-
-  BackpressureLevel GetBackpressureLevel() const noexcept {
-    uint32_t depth = QueueDepth();
-    if (depth >= MAX_QUEUE_DEPTH) {
-      return BackpressureLevel::FULL;
-    }
-    if (depth >= BACKPRESSURE_CRITICAL_THRESHOLD) {
-      return BackpressureLevel::CRITICAL;
-    }
-    if (depth >= BACKPRESSURE_WARNING_THRESHOLD) {
-      return BackpressureLevel::WARNING;
-    }
-    return BackpressureLevel::NORMAL;
-  }
-
- private:
   // ======================== Ring Buffer Node ========================
 
   struct MCCC_ALIGN_CACHELINE RingBufferNode {
@@ -1035,11 +1201,35 @@ class AsyncBus {
 
     detail::ReleaseFence();
     node.sequence.store(cons_pos + BUFFER_SIZE, MCCC_MO_RELEASE);
+    // Commit progress per message. If a callback aborts the batch, the next
+    // call must resume at the next slot instead of re-reading released slots.
+    consumer_pos_.store(cons_pos + 1U, std::memory_order_relaxed);
+    if (deferred_count_ > 0U) {
+      DrainDeferredUnsubscribes();
+    }
 
     return true;
   }
 
-  AsyncBus() noexcept : producer_pos_(0U), cached_consumer_pos_(0U), consumer_pos_(0U), next_msg_id_(1U), stats_() {
+  // ======================== Constructor ========================
+
+ public:
+  /**
+   * @brief Construct a standalone bus instance.
+   *
+   * The object contains the full ring buffer and can be very large. Use
+   * static storage duration or an externally managed lifetime; avoid stack
+   * allocation. Nodes may bind to a specific instance for partitioning.
+   */
+  AsyncBus() noexcept
+      : producer_pos_(0U),
+        cached_consumer_pos_(0U),
+        consumer_pos_(0U),
+        next_msg_id_(1U),
+        stats_(),
+        shutdown_(false),
+        consumer_busy_(false),
+        deferred_count_(0U) {
     for (uint32_t i = 0U; i < BUFFER_SIZE; ++i) {
       ring_buffer_[i].sequence.store(i, std::memory_order_relaxed);
     }
@@ -1051,6 +1241,7 @@ class AsyncBus {
   AsyncBus(AsyncBus&&) = delete;                  // NOLINT(modernize-use-equals-delete)
   AsyncBus& operator=(AsyncBus&&) = delete;       // NOLINT(modernize-use-equals-delete)
 
+ private:
   uint32_t GetThresholdForPriority(MessagePriority priority) const noexcept {
     switch (priority) {
       case MessagePriority::HIGH:
@@ -1065,15 +1256,18 @@ class AsyncBus {
 
   bool PublishInternal(PayloadVariant&& payload, uint32_t sender_id, uint64_t timestamp_us,
                        MessagePriority priority) noexcept {
+    if (shutdown_.load(std::memory_order_acquire)) {
+      ReportError(BusError::NOT_INITIALIZED, 0U);
+      return false;
+    }
+
     const PerformanceMode mode = performance_mode_.load(std::memory_order_relaxed);
     const bool bare_metal = (mode == PerformanceMode::BARE_METAL);
     const bool no_stats = bare_metal || (mode == PerformanceMode::NO_STATS);
 
     uint64_t msg_id = next_msg_id_.load(std::memory_order_relaxed);
     if (msg_id >= MSG_ID_WRAP_THRESHOLD) {
-      if (!no_stats) {
-        ReportError(BusError::OVERFLOW_DETECTED, msg_id);
-      }
+      ReportError(BusError::OVERFLOW_DETECTED, msg_id);
       return false;
     }
 
@@ -1096,8 +1290,8 @@ class AsyncBus {
           if (!no_stats) {
             stats_.messages_dropped.fetch_add(1U, std::memory_order_relaxed);
             UpdatePriorityDroppedStats(priority);
-            ReportError(BusError::QUEUE_FULL, msg_id);
           }
+          ReportError(BusError::QUEUE_FULL, msg_id);
           return false;
         }
       }
@@ -1116,8 +1310,8 @@ class AsyncBus {
       if (!no_stats) {
         stats_.messages_dropped.fetch_add(1U, std::memory_order_relaxed);
         UpdatePriorityDroppedStats(priority);
-        ReportError(BusError::QUEUE_FULL, msg_id);
       }
+      ReportError(BusError::QUEUE_FULL, msg_id);
       return false;
     }
     producer_pos_.store(prod_pos + 1U, std::memory_order_relaxed);
@@ -1132,8 +1326,8 @@ class AsyncBus {
         if (!no_stats) {
           stats_.messages_dropped.fetch_add(1U, std::memory_order_relaxed);
           UpdatePriorityDroppedStats(priority);
-          ReportError(BusError::QUEUE_FULL, msg_id);
         }
+        ReportError(BusError::QUEUE_FULL, msg_id);
         return false;
       }
 
@@ -1154,9 +1348,44 @@ class AsyncBus {
     return true;
   }
 
+  void InvokeCallback(const CallbackType& callback, const EnvelopeType& envelope) noexcept {
+#if MCCC_HAS_EXCEPTIONS
+    try {
+      callback.Invoke(envelope);
+    } catch (...) {
+      stats_.processing_errors.fetch_add(1U, std::memory_order_relaxed);
+      ReportError(BusError::PROCESSING_ERROR, envelope.header.msg_id);
+    }
+#else
+    callback.Invoke(envelope);
+#endif
+  }
+
+  template <typename Visitor>
+  void InvokeVisitor(Visitor& visitor, PayloadVariant& payload, uint64_t msg_id) noexcept {
+#if MCCC_HAS_EXCEPTIONS
+    try {
+      std::visit(visitor, payload);
+    } catch (...) {
+      stats_.processing_errors.fetch_add(1U, std::memory_order_relaxed);
+      ReportError(BusError::PROCESSING_ERROR, msg_id);
+    }
+#else
+    std::visit(visitor, payload);
+#endif
+  }
+
   void DispatchMessage(const EnvelopeType& envelope) noexcept {
+    if (envelope.payload.valueless_by_exception()) {
+      stats_.processing_errors.fetch_add(1U, std::memory_order_relaxed);
+      ReportError(BusError::INVALID_MESSAGE, envelope.header.msg_id);
+      return;
+    }
+
     size_t type_idx = envelope.payload.index();
     if (type_idx >= MCCC_MAX_MESSAGE_TYPES) {
+      stats_.processing_errors.fetch_add(1U, std::memory_order_relaxed);
+      ReportError(BusError::INVALID_MESSAGE, envelope.header.msg_id);
       return;
     }
 
@@ -1167,16 +1396,24 @@ class AsyncBus {
       return;
     }
 
+    ++dispatch_depth_;
     for (uint32_t i = 0U; i < MCCC_MAX_CALLBACKS_PER_TYPE; ++i) {
       if (slot.entries[i].active) {
-        slot.entries[i].callback(envelope);
+        InvokeCallback(slot.entries[i].callback, envelope);
       }
     }
+    --dispatch_depth_;
   }
 
   void DispatchMessageBareMetal(const EnvelopeType& envelope) noexcept {
+    if (envelope.payload.valueless_by_exception()) {
+      ReportError(BusError::INVALID_MESSAGE, envelope.header.msg_id);
+      return;
+    }
+
     size_t type_idx = envelope.payload.index();
     if (type_idx >= MCCC_MAX_MESSAGE_TYPES) {
+      ReportError(BusError::INVALID_MESSAGE, envelope.header.msg_id);
       return;
     }
 
@@ -1185,11 +1422,13 @@ class AsyncBus {
       return;
     }
 
+    ++dispatch_depth_;
     for (uint32_t i = 0U; i < MCCC_MAX_CALLBACKS_PER_TYPE; ++i) {
       if (slot.entries[i].active) {
-        slot.entries[i].callback(envelope);
+        InvokeCallback(slot.entries[i].callback, envelope);
       }
     }
+    --dispatch_depth_;
   }
 
   void UpdatePriorityPublishedStats(MessagePriority priority) noexcept {
@@ -1225,6 +1464,11 @@ class AsyncBus {
   }
 
   void ReportError(BusError error, uint64_t msg_id) const noexcept {
+    ErrorCallbackEx cb_ex = error_callback_ex_.load(std::memory_order_acquire);
+    if (cb_ex != nullptr) {
+      cb_ex(error_context_.load(std::memory_order_acquire), error, msg_id);
+      return;
+    }
     ErrorCallback cb = error_callback_.load(std::memory_order_acquire);
     if (cb != nullptr) {
       cb(error, msg_id);
@@ -1247,7 +1491,15 @@ class AsyncBus {
   std::array<CallbackSlot, MCCC_MAX_MESSAGE_TYPES> callback_table_;
   mutable std::shared_mutex callback_mutex_;
   std::atomic<ErrorCallback> error_callback_{nullptr};
+  std::atomic<ErrorCallbackEx> error_callback_ex_{nullptr};
+  std::atomic<void*> error_context_{nullptr};
   std::atomic<PerformanceMode> performance_mode_{PerformanceMode::FULL_FEATURED};
+  std::atomic<bool> shutdown_;
+  MCCC_ALIGN_CACHELINE std::atomic<bool> consumer_busy_;
+
+  static inline thread_local uint32_t dispatch_depth_ = 0U;
+  std::array<SubscriptionHandle, MCCC_MAX_DEFERRED_UNSUBSCRIBE> deferred_unsub_{};
+  uint32_t deferred_count_;
 };
 
 }  // namespace mccc

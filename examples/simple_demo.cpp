@@ -41,7 +41,7 @@ int main() {
   });
 
   // Subscribe to MotionData
-  ExampleBus::Instance().Subscribe<MotionData>([](const ExampleEnvelope& env) {
+  (void)ExampleBus::Instance().Subscribe<MotionData>([](const ExampleEnvelope& env) {
     const auto* data = std::get_if<MotionData>(&env.payload);
     if (data != nullptr) {
       LOG_INFO("Received MotionData: x=%.1f y=%.1f z=%.1f vel=%.1f", data->x, data->y, data->z, data->velocity);
@@ -49,7 +49,7 @@ int main() {
   });
 
   // Subscribe to SystemLog
-  ExampleBus::Instance().Subscribe<SystemLog>([](const ExampleEnvelope& env) {
+  (void)ExampleBus::Instance().Subscribe<SystemLog>([](const ExampleEnvelope& env) {
     const auto* log = std::get_if<SystemLog>(&env.payload);
     if (log != nullptr) {
       LOG_INFO("Received SystemLog: level=%d content=%s", log->level, log->content.c_str());
@@ -63,11 +63,11 @@ int main() {
   for (int i = 0; i < 5; ++i) {
     float fi = static_cast<float>(i);
     MotionData motion(fi, fi * 2.0f, fi * 3.0f, fi * 0.5f);
-    ExampleBus::Instance().Publish(std::move(motion), /*sender_id=*/1U);
+    (void)ExampleBus::Instance().Publish(std::move(motion), /*sender_id=*/1U);
   }
 
   SystemLog log_msg(1, "Hello from MCCC!");
-  ExampleBus::Instance().Publish(std::move(log_msg), /*sender_id=*/2U);
+  (void)ExampleBus::Instance().Publish(std::move(log_msg), /*sender_id=*/2U);
 
   // Wait for processing
   std::this_thread::sleep_for(std::chrono::milliseconds(200));

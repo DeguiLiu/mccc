@@ -102,17 +102,17 @@ class MessageProducer : public ExampleComponent {
 
   void send_critical_message() noexcept {
     MotionData data{1.0f, 2.0f, 3.0f, 100.0f};
-    ExampleBus::Instance().PublishWithPriority(std::move(data), producer_id_, MessagePriority::HIGH);
+    (void)ExampleBus::Instance().PublishWithPriority(std::move(data), producer_id_, MessagePriority::HIGH);
   }
 
   void send_normal_message() noexcept {
     CameraFrame frame{1920, 1080, "RGB"};
-    ExampleBus::Instance().PublishWithPriority(std::move(frame), producer_id_, MessagePriority::MEDIUM);
+    (void)ExampleBus::Instance().PublishWithPriority(std::move(frame), producer_id_, MessagePriority::MEDIUM);
   }
 
   void send_debug_message() noexcept {
     SystemLog log{1, "Debug information"};
-    ExampleBus::Instance().PublishWithPriority(std::move(log), producer_id_, MessagePriority::LOW);
+    (void)ExampleBus::Instance().PublishWithPriority(std::move(log), producer_id_, MessagePriority::LOW);
   }
 
  private:

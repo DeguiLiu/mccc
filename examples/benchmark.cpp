@@ -136,7 +136,7 @@ BenchmarkResult run_single_benchmark(uint32_t message_count) {
     if ((i % 100U) == 0U) {
       timestamp_us = static_cast<uint64_t>(duration_cast<microseconds>(system_clock::now().time_since_epoch()).count());
     }
-    ExampleBus::Instance().PublishFast(std::move(motion), 100U, timestamp_us);
+    (void)ExampleBus::Instance().PublishFast(std::move(motion), 100U, timestamp_us);
   }
 
   auto end = high_resolution_clock::now();
@@ -192,7 +192,7 @@ void run_e2e_latency_test(uint32_t samples) {
         static_cast<uint64_t>(duration_cast<nanoseconds>(high_resolution_clock::now().time_since_epoch()).count());
 
     MotionData motion(1.0f, 2.0f, 3.0f, 4.0f);
-    ExampleBus::Instance().Publish(std::move(motion), 100U);
+    (void)ExampleBus::Instance().Publish(std::move(motion), 100U);
 
     uint32_t wait_count = 0U;
     while (!e2e::measurement_ready.load(std::memory_order_acquire) && wait_count < 10000U) {

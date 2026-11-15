@@ -61,15 +61,20 @@ class Component : public std::enable_shared_from_this<Component<PayloadVariant>>
 
   virtual ~Component() {
     for (const auto& handle : handles_) {
-      BusType::Instance().Unsubscribe(handle);
+      (void)bus_->Unsubscribe(handle);
     }
   }
+
+  BusType& Bus() noexcept { return *bus_; }
+  const BusType& Bus() const noexcept { return *bus_; }
 
   // No-op by default, can be extended by subclasses
   void InitializeComponent() noexcept {}
 
  protected:
-  Component() noexcept = default;
+  Component() noexcept : bus_(&BusType::Instance()) {}
+
+  explicit Component(BusType& bus) noexcept : bus_(&bus) {}
 
   Component(const Component&) = delete;
   Component& operator=(const Component&) = delete;
@@ -84,9 +89,9 @@ class Component : public std::enable_shared_from_this<Component<PayloadVariant>>
    */
   template <typename T, typename Func>
   void SubscribeSafe(Func&& callback) noexcept {
-    SubscriptionHandle handle = BusType::Instance().template Subscribe<T>(
-        [weak_self = std::weak_ptr<Component>(this->shared_from_this()),
-         cb = std::forward<Func>(callback)](const EnvelopeType& env) noexcept {
+    SubscriptionHandle handle =
+        bus_->template Subscribe<T>([weak_self = std::weak_ptr<Component>(this->shared_from_this()),
+                                     cb = std::forward<Func>(callback)](const EnvelopeType& env) noexcept {
           std::shared_ptr<Component> self = weak_self.lock();
           if (self != nullptr) {
             const T* data = std::get_if<T>(&env.payload);
@@ -96,8 +101,10 @@ class Component : public std::enable_shared_from_this<Component<PayloadVariant>>
           }
         });
 
-    if (handle.callback_id != static_cast<size_t>(-1)) {
-      (void)handles_.push_back(handle);
+    if (handle.IsValid()) {
+      if (!handles_.push_back(handle)) {
+        (void)bus_->Unsubscribe(handle);
+      }
     }
   }
 
@@ -108,21 +115,24 @@ class Component : public std::enable_shared_from_this<Component<PayloadVariant>>
    */
   template <typename T, typename Func>
   void SubscribeSimple(Func&& callback) noexcept {
-    SubscriptionHandle handle = BusType::Instance().template Subscribe<T>(
-        [cb = std::forward<Func>(callback)](const EnvelopeType& env) noexcept {
+    SubscriptionHandle handle =
+        bus_->template Subscribe<T>([cb = std::forward<Func>(callback)](const EnvelopeType& env) noexcept {
           const T* data = std::get_if<T>(&env.payload);
           if (data != nullptr) {
             cb(*data, env.header);
           }
         });
 
-    if (handle.callback_id != static_cast<size_t>(-1)) {
-      (void)handles_.push_back(handle);
+    if (handle.IsValid()) {
+      if (!handles_.push_back(handle)) {
+        (void)bus_->Unsubscribe(handle);
+      }
     }
   }
 
  private:
   FixedVector<SubscriptionHandle, MCCC_MAX_SUBSCRIPTIONS_PER_COMPONENT> handles_;
+  BusType* bus_;
 };
 
 }  // namespace mccc

@@ -22,8 +22,11 @@ add_executable(mccc_tests
     test_copy_move.cpp
     test_fixed_function.cpp
     test_visitor_dispatch.cpp
-    test_static_component.cpp)
+    test_static_component.cpp
+    test_safety.cpp)
 target_link_libraries(mccc_tests Catch2::Catch2WithMain mccc Threads::Threads)
+target_compile_definitions(mccc_tests PRIVATE MCCC_ALLOW_UNSAFE_PERFORMANCE_MODES=1)
+target_compile_options(mccc_tests PRIVATE $<$<CXX_COMPILER_ID:GNU,Clang>:-Wno-unused-result>)
 catch_discover_tests(mccc_tests)
 
 # SPSC mode test target (excludes multi-producer tests)
@@ -38,7 +41,14 @@ add_executable(mccc_tests_spsc
     test_copy_move.cpp
     test_fixed_function.cpp
     test_visitor_dispatch.cpp
-    test_static_component.cpp)
+    test_static_component.cpp
+    test_safety.cpp)
 target_link_libraries(mccc_tests_spsc Catch2::Catch2WithMain mccc Threads::Threads)
-target_compile_definitions(mccc_tests_spsc PRIVATE MCCC_SINGLE_PRODUCER=1)
+target_compile_definitions(mccc_tests_spsc PRIVATE MCCC_SINGLE_PRODUCER=1 MCCC_ALLOW_UNSAFE_PERFORMANCE_MODES=1)
+target_compile_options(mccc_tests_spsc PRIVATE $<$<CXX_COMPILER_ID:GNU,Clang>:-Wno-unused-result>)
 catch_discover_tests(mccc_tests_spsc)
+
+# Default policy: unsafe performance modes must be rejected unless opted in.
+add_executable(mccc_default_policy_test test_default_policy.cpp)
+target_link_libraries(mccc_default_policy_test Catch2::Catch2WithMain mccc Threads::Threads)
+catch_discover_tests(mccc_default_policy_test)

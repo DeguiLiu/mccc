@@ -163,7 +163,7 @@ void send_motion_commands(uint32_t count, uint32_t sender_id) noexcept {
   for (uint32_t i = 0U; i < count; ++i) {
     float fi = static_cast<float>(i);
     MotionData motion(fi * 0.1F, fi * 0.2F, fi * 0.3F, fi * 0.01F);
-    ExampleBus::Instance().Publish(std::move(motion), sender_id);
+    (void)ExampleBus::Instance().Publish(std::move(motion), sender_id);
   }
 }
 
