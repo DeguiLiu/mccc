@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write
 
 jobs:
   coverage:
@@ -54,3 +55,4 @@ jobs:
         file: build/coverage.info
         fail_ci_if_error: false
         verbose: true
+        use_oidc: true
